@@ -53,9 +53,9 @@ settings = Settings()
 app = FastAPI(title="Rebecca-node Maintenance API", version="0.1.0")
 
 
-def run_subprocess(cmd: List[str]) -> subprocess.CompletedProcess[bytes]:
+def run_subprocess(cmd: List[str], *, env: Optional[dict[str, str]] = None) -> subprocess.CompletedProcess[bytes]:
     logger.info("Executing command: %s", " ".join(cmd))
-    completed = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    completed = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
     if completed.returncode != 0:
         raise RuntimeError(
             f"Command {' '.join(cmd)} failed with exit code {completed.returncode}",
@@ -65,10 +65,10 @@ def run_subprocess(cmd: List[str]) -> subprocess.CompletedProcess[bytes]:
     return completed
 
 
-async def run_cli(*args: str) -> JSONResponse:
+async def run_cli_capture(*args: str, env: Optional[dict[str, str]] = None) -> dict[str, str]:
     def _runner():
         try:
-            result = run_subprocess([str(settings.node_cli), *args])
+            result = run_subprocess([str(settings.node_cli), *args], env=env)
             return {
                 "status": "ok",
                 "stdout": result.stdout.decode(errors="ignore"),
@@ -83,7 +83,11 @@ async def run_cli(*args: str) -> JSONResponse:
                 detail={"message": message, "stdout": stdout, "stderr": stderr},
             ) from exc
 
-    payload = await asyncio.to_thread(_runner)
+    return await asyncio.to_thread(_runner)
+
+
+async def run_cli(*args: str) -> JSONResponse:
+    payload = await run_cli_capture(*args)
     return JSONResponse({"status": payload["status"], "stdout": payload["stdout"].strip()})
 
 
@@ -102,7 +106,26 @@ async def health():
 
 @app.post("/update")
 async def update_node():
-    return await run_cli("update")
+    # Avoid self-termination: updating maintenance service from inside maintenance API
+    # can restart this process and kill the running command with SIGTERM (-15).
+    combined_stdout: list[str] = []
+
+    script_update = await run_cli_capture("script-update")
+    if script_update.get("stdout"):
+        combined_stdout.append(script_update["stdout"].strip())
+
+    env = dict(os.environ)
+    env["REBECCA_NODE_SKIP_SERVICE_UPDATE"] = "1"
+    update_result = await run_cli_capture("update", "--skip-service-update", env=env)
+    if update_result.get("stdout"):
+        combined_stdout.append(update_result["stdout"].strip())
+
+    return JSONResponse(
+        {
+            "status": "ok",
+            "stdout": "\n".join(chunk for chunk in combined_stdout if chunk).strip(),
+        }
+    )
 
 
 @app.post("/restart")
