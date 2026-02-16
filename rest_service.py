@@ -164,7 +164,7 @@ class Service(object):
         self.match_session_id(session_id)
 
         try:
-            config = XRayConfig(config, self.client_ip)
+            config = XRayConfig(config, self.client_ip, xray_version=self.core_version)
         except json.decoder.JSONDecodeError as exc:
             raise HTTPException(status_code=422, detail={"config": f"Failed to decode config: {exc}"})
 
@@ -210,7 +210,7 @@ class Service(object):
         self.match_session_id(session_id)
 
         try:
-            config = XRayConfig(config, self.client_ip)
+            config = XRayConfig(config, self.client_ip, xray_version=self.core_version)
         except json.decoder.JSONDecodeError as exc:
             raise HTTPException(status_code=422, detail={"config": f"Failed to decode config: {exc}"})
 

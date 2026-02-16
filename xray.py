@@ -30,6 +30,7 @@ LOG_CLEANUP_INTERVAL_OPTIONS_SECONDS = (
     21600,
     86400,
 )
+VERIFY_PEER_CERT_BY_NAME_MIN_VERSION = "26.1.31"
 
 
 def normalize_log_cleanup_interval(value) -> int:
@@ -48,34 +49,89 @@ def normalize_log_cleanup_interval(value) -> int:
     return LOG_CLEANUP_INTERVAL_DISABLED
 
 
-def normalize_tls_verify_peer_cert_fields(tls_settings: dict) -> dict:
+def _first_non_empty_string(value) -> str:
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, (list, tuple, set)):
+        for item in value:
+            candidate = str(item).strip()
+            if candidate:
+                return candidate
+        return ""
+    if value is None:
+        return ""
+    return str(value).strip()
+
+
+def _normalize_name_list(value) -> list[str]:
+    if isinstance(value, str):
+        candidate = value.strip()
+        return [candidate] if candidate else []
+    if isinstance(value, (list, tuple, set)):
+        names = [str(item).strip() for item in value]
+        return [name for name in names if name]
+    return []
+
+
+def _parse_version_parts(version: Optional[str]) -> Optional[list[int]]:
+    if not version:
+        return None
+    match = re.search(r"(\d+(?:\.\d+)+)", str(version))
+    raw = match.group(1) if match else str(version)
+    try:
+        return [int(part) for part in raw.split(".")]
+    except (TypeError, ValueError):
+        return None
+
+
+def is_xray_version_at_least(current_version: Optional[str], target_version: str) -> bool:
+    current_parts = _parse_version_parts(current_version)
+    target_parts = _parse_version_parts(target_version)
+    if not current_parts or not target_parts:
+        # Keep modern behavior when version cannot be determined.
+        return True
+
+    max_len = max(len(current_parts), len(target_parts))
+    current_parts.extend([0] * (max_len - len(current_parts)))
+    target_parts.extend([0] * (max_len - len(target_parts)))
+    return tuple(current_parts) >= tuple(target_parts)
+
+
+def normalize_tls_verify_peer_cert_fields(
+    tls_settings: dict,
+    *,
+    use_verify_peer_cert_by_name: bool = True,
+) -> dict:
     """
-    Migrate deprecated verify-peer TLS field names for modern Xray.
+    Normalize TLS verify-peer fields by target Xray compatibility.
+
+    - Newer Xray: use `verifyPeerCertByName` (string), remove old key.
+    - Older Xray: use `verifyPeerCertInNames` (list), remove new key.
     """
     if not isinstance(tls_settings, dict):
         return {}
 
     normalized = dict(tls_settings)
-    by_name = normalized.get("verifyPeerCertByName")
-    in_names = normalized.get("verifyPeerCertInNames")
+    by_name = _first_non_empty_string(normalized.get("verifyPeerCertByName"))
+    in_names = _normalize_name_list(normalized.get("verifyPeerCertInNames"))
 
-    if (not isinstance(by_name, str) or not by_name.strip()) and in_names:
-        if isinstance(in_names, list):
-            by_name = next((str(item).strip() for item in in_names if str(item).strip()), "")
-        elif isinstance(in_names, str):
-            by_name = in_names.strip()
+    if not by_name and in_names:
+        by_name = in_names[0]
+    if not in_names and by_name:
+        in_names = [by_name]
 
-    if isinstance(by_name, list):
-        by_name = next((str(item).strip() for item in by_name if str(item).strip()), "")
-    elif by_name is not None and not isinstance(by_name, str):
-        by_name = str(by_name).strip()
-
-    if isinstance(by_name, str) and by_name.strip():
-        normalized["verifyPeerCertByName"] = by_name.strip()
+    if use_verify_peer_cert_by_name:
+        if by_name:
+            normalized["verifyPeerCertByName"] = by_name
+        else:
+            normalized.pop("verifyPeerCertByName", None)
+        normalized.pop("verifyPeerCertInNames", None)
     else:
+        if in_names:
+            normalized["verifyPeerCertInNames"] = in_names
+        else:
+            normalized.pop("verifyPeerCertInNames", None)
         normalized.pop("verifyPeerCertByName", None)
-
-    normalized.pop("verifyPeerCertInNames", None)
     return normalized
 
 
@@ -85,7 +141,7 @@ class XRayConfig(dict):
     config must contain an inbound with the API_INBOUND tag name which handles API requests
     """
 
-    def __init__(self, config: str, peer_ip: str):
+    def __init__(self, config: str, peer_ip: str, xray_version: Optional[str] = None):
         config = json.loads(config)
 
         self.api_host = XRAY_API_HOST
@@ -93,6 +149,7 @@ class XRayConfig(dict):
         self.ssl_cert = SSL_CERT_FILE
         self.ssl_key = SSL_KEY_FILE
         self.peer_ip = peer_ip
+        self.xray_version = xray_version
 
         super().__init__(config)
         self._migrate_deprecated_configs()
@@ -103,12 +160,19 @@ class XRayConfig(dict):
         return json.dumps(self, **json_kwargs)
 
     def _migrate_deprecated_configs(self):
+        use_verify_peer_cert_by_name = is_xray_version_at_least(
+            self.xray_version, VERIFY_PEER_CERT_BY_NAME_MIN_VERSION
+        )
+
         def _migrate_stream(stream):
             if not isinstance(stream, dict):
                 return
             tls_settings = stream.get("tlsSettings")
             if isinstance(tls_settings, dict):
-                stream["tlsSettings"] = normalize_tls_verify_peer_cert_fields(tls_settings)
+                stream["tlsSettings"] = normalize_tls_verify_peer_cert_fields(
+                    tls_settings,
+                    use_verify_peer_cert_by_name=use_verify_peer_cert_by_name,
+                )
 
         for inbound in self.get("inbounds", []):
             _migrate_stream(inbound.get("streamSettings"))
