@@ -3,7 +3,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-NODE_VERSION_FALLBACK = "0.0.3"
+NODE_VERSION_FALLBACK = "0.0.4"
 
 SERVICE_HOST = config("SERVICE_HOST", default="0.0.0.0")
 SERVICE_PORT = config("SERVICE_PORT", cast=int, default=62050)
