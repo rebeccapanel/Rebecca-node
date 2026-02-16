@@ -71,6 +71,7 @@ class Service(object):
         self.router.add_api_route("/access_logs", self.get_access_logs, methods=["POST"])
 
         self.router.add_websocket_route("/logs", self.logs)
+        self.router.add_websocket_route("/access_logs/ws", self.access_logs_ws)
 
     def _build_node_service_base(self):
         host = (NODE_SERVICE_HOST or "").strip()
@@ -455,13 +456,7 @@ class Service(object):
 
         return {"detail": f"Geo assets saved to {assets_dir}", "saved": saved}
 
-    def get_access_logs(self, session_id: UUID = Body(embed=True), max_lines: int = Body(default=500, embed=True)):
-        """
-        Retrieve access logs from this node for forwarding to master.
-        Returns the last N lines from the access log file.
-        """
-        self.match_session_id(session_id)
-
+    def _resolve_access_log_path(self) -> Path | None:
         def _resolve_log_path(value, filename: str, base_dir: Path) -> Path | None:
             """
             Resolve an access log path from config, honoring relative paths and 'none' sentinel.
@@ -494,18 +489,66 @@ class Service(object):
 
         if access_log_path is None:
             access_log_path = base_dir / "access.log"
+        return Path(access_log_path)
 
-        access_log_file = Path(access_log_path)
+    def _read_access_logs(self, max_lines: int) -> dict:
+        access_log_file = self._resolve_access_log_path()
 
-        if not access_log_file.exists():
-            return {"log_path": str(access_log_path), "exists": False, "lines": [], "total_lines": 0}
+        if not access_log_file or not access_log_file.exists():
+            return {
+                "log_path": str(access_log_file) if access_log_file else "",
+                "exists": False,
+                "lines": [],
+                "total_lines": 0,
+            }
 
         try:
             lines = self._tail_file(access_log_file, max_lines)
-            return {"log_path": str(access_log_path), "exists": True, "lines": lines, "total_lines": len(lines)}
+            return {"log_path": str(access_log_file), "exists": True, "lines": lines, "total_lines": len(lines)}
         except Exception as e:
             logger.error(f"Failed to read access logs: {e}")
             raise HTTPException(status_code=500, detail=f"Failed to read access logs: {e}")
+
+    def get_access_logs(self, session_id: UUID = Body(embed=True), max_lines: int = Body(default=500, embed=True)):
+        """
+        Retrieve access logs from this node for forwarding to master.
+        Returns the last N lines from the access log file.
+        """
+        self.match_session_id(session_id)
+        return self._read_access_logs(max_lines)
+
+    async def access_logs_ws(self, websocket: WebSocket):
+        session_id_raw = websocket.query_params.get("session_id")
+        max_lines_raw = websocket.query_params.get("max_lines")
+
+        try:
+            session_id = UUID(session_id_raw) if session_id_raw else None
+            if not session_id:
+                return await websocket.close(reason="session_id is required", code=4400)
+            self.match_session_id(session_id)
+        except ValueError:
+            return await websocket.close(reason="session_id should be a valid UUID", code=4400)
+        except HTTPException:
+            return await websocket.close(reason="Session ID mismatch.", code=4403)
+
+        max_lines = 500
+        if max_lines_raw:
+            try:
+                max_lines = max(1, min(int(max_lines_raw), 5000))
+            except ValueError:
+                return await websocket.close(reason="max_lines should be integer", code=4400)
+
+        await websocket.accept()
+        try:
+            payload = self._read_access_logs(max_lines)
+            await websocket.send_text(json.dumps(payload))
+        except Exception as exc:
+            await websocket.send_text(json.dumps({"error": str(exc), "lines": []}))
+        finally:
+            try:
+                await websocket.close()
+            except Exception:
+                pass
 
     def _tail_file(self, path: Path, max_lines: int) -> list[str]:
         """Read last N lines from a file efficiently."""

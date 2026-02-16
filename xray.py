@@ -48,6 +48,37 @@ def normalize_log_cleanup_interval(value) -> int:
     return LOG_CLEANUP_INTERVAL_DISABLED
 
 
+def normalize_tls_verify_peer_cert_fields(tls_settings: dict) -> dict:
+    """
+    Migrate deprecated verify-peer TLS field names for modern Xray.
+    """
+    if not isinstance(tls_settings, dict):
+        return {}
+
+    normalized = dict(tls_settings)
+    by_name = normalized.get("verifyPeerCertByName")
+    in_names = normalized.get("verifyPeerCertInNames")
+
+    if (not isinstance(by_name, str) or not by_name.strip()) and in_names:
+        if isinstance(in_names, list):
+            by_name = next((str(item).strip() for item in in_names if str(item).strip()), "")
+        elif isinstance(in_names, str):
+            by_name = in_names.strip()
+
+    if isinstance(by_name, list):
+        by_name = next((str(item).strip() for item in by_name if str(item).strip()), "")
+    elif by_name is not None and not isinstance(by_name, str):
+        by_name = str(by_name).strip()
+
+    if isinstance(by_name, str) and by_name.strip():
+        normalized["verifyPeerCertByName"] = by_name.strip()
+    else:
+        normalized.pop("verifyPeerCertByName", None)
+
+    normalized.pop("verifyPeerCertInNames", None)
+    return normalized
+
+
 class XRayConfig(dict):
     """
     Loads Xray config json
@@ -64,10 +95,26 @@ class XRayConfig(dict):
         self.peer_ip = peer_ip
 
         super().__init__(config)
+        self._migrate_deprecated_configs()
         self._apply_api()
 
     def to_json(self, **json_kwargs):
+        self._migrate_deprecated_configs()
         return json.dumps(self, **json_kwargs)
+
+    def _migrate_deprecated_configs(self):
+        def _migrate_stream(stream):
+            if not isinstance(stream, dict):
+                return
+            tls_settings = stream.get("tlsSettings")
+            if isinstance(tls_settings, dict):
+                stream["tlsSettings"] = normalize_tls_verify_peer_cert_fields(tls_settings)
+
+        for inbound in self.get("inbounds", []):
+            _migrate_stream(inbound.get("streamSettings"))
+
+        for outbound in self.get("outbounds", []):
+            _migrate_stream(outbound.get("streamSettings"))
 
     def _apply_api(self):
         for inbound in self.get("inbounds", []).copy():
