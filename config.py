@@ -1,3 +1,6 @@
+import os
+from pathlib import Path
+
 from decouple import config
 from dotenv import load_dotenv
 
@@ -10,8 +13,32 @@ SERVICE_PORT = config("SERVICE_PORT", cast=int, default=62050)
 
 XRAY_API_HOST = config("XRAY_API_HOST", default="0.0.0.0")
 XRAY_API_PORT = config("XRAY_API_PORT", cast=int, default=62051)
-XRAY_EXECUTABLE_PATH = config("XRAY_EXECUTABLE_PATH", default="/usr/local/bin/xray")
-XRAY_ASSETS_PATH = config("XRAY_ASSETS_PATH", default="/usr/local/share/xray")
+REBECCA_DATA_DIR = Path(config("REBECCA_DATA_DIR", default="/var/lib/rebecca-node")).expanduser()
+PERSISTENT_XRAY_DIR = REBECCA_DATA_DIR / "xray-core"
+PERSISTENT_XRAY_EXECUTABLE = PERSISTENT_XRAY_DIR / "xray"
+
+
+def _resolve_xray_executable_path() -> str:
+    configured = (os.getenv("XRAY_EXECUTABLE_PATH") or "").strip()
+    if PERSISTENT_XRAY_EXECUTABLE.exists():
+        return str(PERSISTENT_XRAY_EXECUTABLE)
+    if configured:
+        return configured
+    return "/usr/local/bin/xray"
+
+
+def _resolve_xray_assets_path() -> str:
+    configured = (os.getenv("XRAY_ASSETS_PATH") or "").strip()
+    for candidate in (PERSISTENT_XRAY_DIR, REBECCA_DATA_DIR / "assets"):
+        if (candidate / "geoip.dat").exists() or (candidate / "geosite.dat").exists():
+            return str(candidate)
+    if configured:
+        return configured
+    return "/usr/local/share/xray"
+
+
+XRAY_EXECUTABLE_PATH = _resolve_xray_executable_path()
+XRAY_ASSETS_PATH = _resolve_xray_assets_path()
 XRAY_LOG_DIR = config("XRAY_LOG_DIR", default="").strip()
 
 NODE_VERSION = config("NODE_VERSION", default=NODE_VERSION_FALLBACK)

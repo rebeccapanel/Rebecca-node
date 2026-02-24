@@ -7,9 +7,12 @@ services:
 
     # env_file: .env
     environment:
+      REBECCA_DATA_DIR: "/var/lib/rebecca-node"
       SSL_CERT_FILE: "/var/lib/rebecca-node/ssl_cert.pem"
       SSL_KEY_FILE: "/var/lib/rebecca-node/ssl_key.pem"
       # SSL_CLIENT_CERT_FILE: "/var/lib/rebecca-node/ssl_client_cert.pem"
+      # XRAY_EXECUTABLE_PATH: "/var/lib/rebecca-node/xray-core/xray"
+      # XRAY_ASSETS_PATH: "/var/lib/rebecca-node/xray-core"
 
     volumes:
       - /var/lib/rebecca-node:/var/lib/rebecca-node
