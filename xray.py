@@ -448,6 +448,7 @@ class XRayCore:
         runtime_log_config.pop("errorCleanupInterval", None)
         runtime_config["log"] = runtime_log_config
 
+        self._env["XRAY_LOCATION_ASSET"] = str(self.assets_path)
         cmd = [self.executable_path, "run", "-config", "stdin:"]
         self.process = subprocess.Popen(
             cmd,

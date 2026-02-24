@@ -10,6 +10,7 @@ from fastapi.responses import JSONResponse
 from starlette.websockets import WebSocketDisconnect
 
 from config import (
+    REBECCA_DATA_DIR,
     XRAY_ASSETS_PATH,
     XRAY_EXECUTABLE_PATH,
     NODE_SERVICE_HOST,
@@ -28,7 +29,6 @@ import os
 import stat
 import shutil
 from pathlib import Path
-import subprocess
 
 app = FastAPI()
 
@@ -44,6 +44,27 @@ def validation_exception_handler(request: Request, exc: RequestValidationError):
     )
 
 
+def _update_env_envfile(env_path: Path, key: str, value: str) -> str:
+    """Upsert key in .env file and return the effective value."""
+    env_path.parent.mkdir(parents=True, exist_ok=True)
+    env_path.touch(exist_ok=True)
+    lines = env_path.read_text(encoding="utf-8").splitlines()
+    found = False
+
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        if stripped.startswith(f"{key}="):
+            lines[i] = f'{key}="{value}"'
+            found = True
+            break
+
+    if not found:
+        lines.append(f'{key}="{value}"')
+
+    env_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return value
+
+
 class Service(object):
     def __init__(self):
         self.router = APIRouter()
@@ -51,6 +72,8 @@ class Service(object):
         self.connected = False
         self.client_ip = None
         self.session_id = None
+        self.data_dir = Path(REBECCA_DATA_DIR).expanduser().resolve()
+        self.node_service_name = (os.getenv("REBECCA_NODE_SERVICE_NAME") or "rebecca-node").strip() or "rebecca-node"
         self.core = XRayCore(executable_path=XRAY_EXECUTABLE_PATH, assets_path=XRAY_ASSETS_PATH)
         self.core_version = self.core.get_version()
         self.node_version = NODE_VERSION
@@ -365,32 +388,106 @@ class Service(object):
             saved.append({"name": name, "path": str(dst)})
         return saved
 
-    def _update_docker_compose(self, compose_file: Path, key: str, value: str):
-        """Update or add an environment variable in docker-compose.yml and restart container."""
-        try:
-            with open(compose_file, "r") as f:
-                content = f.read()
+    def _xray_dir(self) -> Path:
+        target = (self.data_dir / "xray-core").resolve()
+        target.mkdir(parents=True, exist_ok=True)
+        return target
 
+    def _persist_xray_env(self, *, executable_path: Path | None = None, assets_path: Path | None = None) -> None:
+        env_targets = [Path(".env"), self.data_dir / ".env"]
+        for env_path in env_targets:
+            try:
+                if executable_path is not None:
+                    _update_env_envfile(env_path, "XRAY_EXECUTABLE_PATH", str(executable_path))
+                if assets_path is not None:
+                    _update_env_envfile(env_path, "XRAY_ASSETS_PATH", str(assets_path))
+                _update_env_envfile(env_path, "REBECCA_DATA_DIR", str(self.data_dir))
+            except Exception as exc:
+                logger.warning("Failed to persist %s: %s", env_path, exc)
+
+    def _compose_candidates(self) -> list[Path]:
+        candidates: list[Path] = []
+        for key in ("REBECCA_NODE_COMPOSE_FILE", "REBECCA_COMPOSE_FILE"):
+            value = (os.getenv(key) or "").strip()
+            if value:
+                candidates.append(Path(value).expanduser())
+
+        candidates.extend(
+            [
+                self.data_dir / "docker-compose.yml",
+                Path("/opt/rebecca-node/docker-compose.yml"),
+                Path("/opt/reb/docker-compose.yml"),
+            ]
+        )
+
+        unique: list[Path] = []
+        seen: set[str] = set()
+        for path in candidates:
+            key = str(path)
+            if key in seen:
+                continue
+            seen.add(key)
+            unique.append(path)
+        return unique
+
+    def _find_compose_file(self) -> Path | None:
+        for candidate in self._compose_candidates():
+            if candidate.exists():
+                return candidate
+        return None
+
+    def _sync_compose_env(self, updates: dict[str, str]) -> None:
+        compose_file = self._find_compose_file()
+        if compose_file is None:
+            logger.info("Compose file not found for env sync. Set REBECCA_NODE_COMPOSE_FILE if needed.")
+            return
+        self._update_docker_compose(compose_file, updates)
+
+    def _update_docker_compose(self, compose_file: Path, updates: dict[str, str]) -> None:
+        """
+        Best-effort docker-compose env sync for installations that keep
+        runtime env values in compose. Failures are non-fatal.
+        """
+        try:
             import yaml
 
-            data = yaml.safe_load(content) or {"services": {"rebecca-node": {"environment": {}}}}
-            env = data.get("services", {}).get("rebecca-node", {}).get("environment", {})
+            with compose_file.open("r", encoding="utf-8") as f:
+                content = f.read()
 
-            env[key] = value
+            data = yaml.safe_load(content) or {}
+            services = data.setdefault("services", {})
+            service_key = self.node_service_name
+            if service_key not in services:
+                if "rebecca-node" in services:
+                    service_key = "rebecca-node"
+                else:
+                    for name, service_data in services.items():
+                        image = str((service_data or {}).get("image") or "").lower()
+                        if "rebecca-node" in image:
+                            service_key = str(name)
+                            break
+            node_service = services.setdefault(service_key, {})
+            env_raw = node_service.get("environment") or {}
 
-            volumes = data.get("services", {}).get("rebecca-node", {}).get("volumes", [])
-            asset_volume = "/var/lib/reb/assets:/usr/local/share/xray"
-            if asset_volume not in volumes:
-                volumes.append(asset_volume)
-            data["services"]["rebecca-node"]["environment"] = env
-            data["services"]["rebecca-node"]["volumes"] = volumes
+            env: dict[str, str] = {}
+            if isinstance(env_raw, dict):
+                env = {str(k): str(v) for k, v in env_raw.items()}
+            elif isinstance(env_raw, list):
+                for item in env_raw:
+                    if not isinstance(item, str) or "=" not in item:
+                        continue
+                    k, v = item.split("=", 1)
+                    env[k.strip()] = v.strip()
 
-            with open(compose_file, "w") as f:
-                yaml.safe_dump(data, f, allow_unicode=True)
+            for key, value in updates.items():
+                env[key] = str(value)
 
-            subprocess.run(["docker-compose", "-f", str(compose_file), "up", "-d"], check=True)
-        except Exception as e:
-            raise HTTPException(500, detail=f"Failed to update docker-compose.yml: {e}")
+            node_service["environment"] = env
+
+            with compose_file.open("w", encoding="utf-8") as f:
+                yaml.safe_dump(data, f, allow_unicode=True, sort_keys=False)
+        except Exception as exc:
+            logger.warning("Failed to sync docker-compose env (%s): %s", compose_file, exc)
 
     def update_core(self, version: str = Body(embed=True)):
         if not version:
@@ -405,13 +502,13 @@ class Service(object):
         except Exception as e:
             raise HTTPException(502, detail=f"Download failed: {e}")
 
-        base_dir = Path("/var/lib/reb/xray-core")
-        base_dir.mkdir(parents=True, exist_ok=True)
+        base_dir = self._xray_dir()
         if self.core.started:
             try:
                 self.core.stop()
             except RuntimeError:
                 pass
+
         extracted_exe = Path(self._install_zip_to(zip_bytes, str(base_dir)))
         final_exe = base_dir / "xray"
         try:
@@ -423,14 +520,22 @@ class Service(object):
             shutil.copyfile(str(extracted_exe), str(final_exe))
             if platform.system().lower().startswith("linux"):
                 final_exe.chmod(final_exe.stat().st_mode | stat.S_IEXEC)
-        exe_path = str(final_exe)
 
-        self.core.executable_path = exe_path
+        exe_path = final_exe.resolve()
+
+        self.core.executable_path = str(exe_path)
+        self.core.assets_path = str(base_dir)
+        self.core._env["XRAY_LOCATION_ASSET"] = str(base_dir)
         self.core_version = self.core.get_version()
+        self._persist_xray_env(executable_path=exe_path, assets_path=base_dir)
 
-        compose_file = Path("/opt/reb/docker-compose.yml")
-        if compose_file.exists():
-            self._update_docker_compose(compose_file, "XRAY_EXECUTABLE_PATH", "/var/lib/rebecca-node/xray-core/xray")
+        self._sync_compose_env(
+            {
+                "REBECCA_DATA_DIR": str(self.data_dir),
+                "XRAY_EXECUTABLE_PATH": str(exe_path),
+                "XRAY_ASSETS_PATH": str(base_dir),
+            }
+        )
 
         return {"detail": f"Node core ready at {exe_path}", "version": self.core_version}
 
@@ -441,18 +546,22 @@ class Service(object):
         if not isinstance(files, list) or not files:
             raise HTTPException(422, detail="'files' must be a non-empty list of {name,url}.")
 
-        assets_dir = Path("/var/lib/reb/assets")
-        assets_dir.mkdir(parents=True, exist_ok=True)
+        assets_dir = self._xray_dir()
         saved = self._download_files_to(assets_dir, files)
 
         try:
-            self.core.assets_path = "/usr/local/share/xray"
+            self.core.assets_path = str(assets_dir)
+            self.core._env["XRAY_LOCATION_ASSET"] = str(assets_dir)
         except Exception:
             pass
+        self._persist_xray_env(assets_path=assets_dir)
 
-        compose_file = Path("/opt/reb/docker-compose.yml")
-        if compose_file.exists():
-            self._update_docker_compose(compose_file, "XRAY_ASSETS_PATH", "/usr/local/share/xray")
+        self._sync_compose_env(
+            {
+                "REBECCA_DATA_DIR": str(self.data_dir),
+                "XRAY_ASSETS_PATH": str(assets_dir),
+            }
+        )
 
         return {"detail": f"Geo assets saved to {assets_dir}", "saved": saved}
 
@@ -477,7 +586,8 @@ class Service(object):
 
         from config import XRAY_LOG_DIR, XRAY_ASSETS_PATH
 
-        base_dir = Path(XRAY_LOG_DIR or XRAY_ASSETS_PATH or "/var/log").expanduser()
+        runtime_assets = getattr(self.core, "assets_path", "") or XRAY_ASSETS_PATH
+        base_dir = Path(XRAY_LOG_DIR or runtime_assets or "/var/log").expanduser()
         access_log_path = None
         if self.config and hasattr(self.config, "get"):
             try:
