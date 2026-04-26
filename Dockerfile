@@ -16,7 +16,7 @@ FROM debian:bookworm-slim AS xray
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates curl unzip bash \
-    && curl -L https://github.com/rebeccapanel/Rebecca-scripts/raw/master/install_latest_xray.sh | bash \
+    && curl -L https://raw.githubusercontent.com/rebeccapanel/Rebecca/dev/scripts/rebecca/install_latest_xray.sh | bash \
     && rm -rf /var/lib/apt/lists/*
 
 FROM debian:bookworm-slim
