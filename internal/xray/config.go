@@ -76,6 +76,7 @@ func (c *Config) applyAPI() {
 		"tag":      "API",
 	}
 	c.data["stats"] = map[string]any{}
+	c.applyStatsPolicy()
 
 	inbound := map[string]any{
 		"listen":   c.settings.XrayAPIHost,
@@ -111,6 +112,35 @@ func (c *Config) applyAPI() {
 	rules, _ := routing["rules"].([]any)
 	routing["rules"] = append([]any{rule}, rules...)
 	c.data["routing"] = routing
+}
+
+func (c *Config) applyStatsPolicy() {
+	policy, _ := c.data["policy"].(map[string]any)
+	if policy == nil {
+		policy = map[string]any{}
+	}
+
+	levels := ensureConfigMap(policy, "levels")
+	level0 := ensureConfigMap(levels, "0")
+	level0["statsUserUplink"] = true
+	level0["statsUserDownlink"] = true
+
+	system := ensureConfigMap(policy, "system")
+	system["statsInboundDownlink"] = false
+	system["statsInboundUplink"] = false
+	system["statsOutboundDownlink"] = true
+	system["statsOutboundUplink"] = true
+
+	c.data["policy"] = policy
+}
+
+func ensureConfigMap(parent map[string]any, key string) map[string]any {
+	if child, ok := parent[key].(map[string]any); ok {
+		return child
+	}
+	child := map[string]any{}
+	parent[key] = child
+	return child
 }
 
 func (c *Config) filterInbounds() {
