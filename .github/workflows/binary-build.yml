@@ -1,0 +1,97 @@
+name: Binary Build
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - dev
+  pull_request:
+    branches:
+      - "**"
+  release:
+    types:
+      - published
+      - prereleased
+
+permissions:
+  contents: write
+
+jobs:
+  build-linux-amd64:
+    runs-on: ubuntu-latest
+    env:
+      GO_VERSION: "1.22"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve build metadata
+        id: meta
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ "${{ github.event_name }}" == "release" ]]; then
+            VERSION="${{ github.event.release.tag_name }}"
+            RELEASE_TAG="${{ github.event.release.tag_name }}"
+            UPLOAD_RELEASE="true"
+          elif [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            VERSION="${GITHUB_REF_NAME}"
+            RELEASE_TAG="${GITHUB_REF_NAME}"
+            UPLOAD_RELEASE="true"
+          elif [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            VERSION="pr-${{ github.event.pull_request.number }}-${GITHUB_SHA::7}"
+            RELEASE_TAG=""
+            UPLOAD_RELEASE="false"
+          else
+            REF_SLUG="$(echo "${GITHUB_REF_NAME}" | tr '/[:space:]' '-' | tr -cd '[:alnum:]._-')"
+            VERSION="${REF_SLUG}-${GITHUB_SHA::7}"
+            RELEASE_TAG=""
+            UPLOAD_RELEASE="false"
+          fi
+
+          ARTIFACT_NAME="rebecca-node-binaries-linux-amd64"
+          NODE_ASSET_NAME="rebecca-node-${VERSION}-linux-amd64"
+          SERVICE_ASSET_NAME="rebecca-node-service-${VERSION}-linux-amd64"
+
+          echo "artifact_name=${ARTIFACT_NAME}" >> "${GITHUB_OUTPUT}"
+          echo "node_asset_name=${NODE_ASSET_NAME}" >> "${GITHUB_OUTPUT}"
+          echo "service_asset_name=${SERVICE_ASSET_NAME}" >> "${GITHUB_OUTPUT}"
+          echo "release_tag=${RELEASE_TAG}" >> "${GITHUB_OUTPUT}"
+          echo "upload_release=${UPLOAD_RELEASE}" >> "${GITHUB_OUTPUT}"
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: Build binaries
+        env:
+          REBECCA_NODE_GOOS: linux
+          REBECCA_NODE_GOARCH: amd64
+        run: go run ./tools/build
+
+      - name: Smoke test binaries
+        run: go run ./tools/smoke
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.meta.outputs.artifact_name }}
+          path: |
+            dist/rebecca-node
+            dist/rebecca-node-service
+
+      - name: Upload release asset
+        if: steps.meta.outputs.upload_release == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release view "${{ steps.meta.outputs.release_tag }}" >/dev/null 2>&1 || \
+            gh release create "${{ steps.meta.outputs.release_tag }}" --title "${{ steps.meta.outputs.release_tag }}" --notes "Rebecca-node ${{ steps.meta.outputs.release_tag }}"
+          gh release upload "${{ steps.meta.outputs.release_tag }}" \
+            "dist/rebecca-node#${{ steps.meta.outputs.node_asset_name }}" \
+            "dist/rebecca-node-service#${{ steps.meta.outputs.service_asset_name }}" \
+            --clobber

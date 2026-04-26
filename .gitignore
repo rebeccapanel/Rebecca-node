@@ -8,10 +8,10 @@ __pycache__/
 
 # Distribution / packaging
 .Python
-build/
+/build/
 develop-eggs/
-dist/
-downloads/
+/dist/
+/downloads/
 eggs/
 .eggs/
 lib/
@@ -123,6 +123,7 @@ celerybeat.pid
 # Environments
 .env
 .venv
+.venv-binary/
 env/
 venv/
 ENV/
