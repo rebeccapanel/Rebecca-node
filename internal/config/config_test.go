@@ -50,6 +50,14 @@ func TestResolveXrayAssetsPathFallsBackToConfiguredEnv(t *testing.T) {
 	}
 }
 
+func TestLoadDefaultsInstallModeToDocker(t *testing.T) {
+	_ = os.Unsetenv("REBECCA_NODE_INSTALL_MODE")
+	settings := Load()
+	if settings.InstallMode != "docker" {
+		t.Fatalf("expected docker install mode by default, got %q", settings.InstallMode)
+	}
+}
+
 func ensureTestFile(path string) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err

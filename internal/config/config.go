@@ -14,6 +14,7 @@ const NodeVersionFallback = "0.0.4"
 
 type Settings struct {
 	AppName     string
+	InstallMode string
 	ServiceHost string
 	ServicePort int
 
@@ -71,6 +72,7 @@ func Load() Settings {
 	dataDir := getString("REBECCA_DATA_DIR", "/var/lib/rebecca-node")
 	return Settings{
 		AppName:     getString("REBECCA_NODE_APP_NAME", "rebecca-node"),
+		InstallMode: getInstallMode(),
 		ServiceHost: getString("SERVICE_HOST", "0.0.0.0"),
 		ServicePort: getInt("SERVICE_PORT", 62050),
 
@@ -147,6 +149,14 @@ func getString(key, fallback string) string {
 		return strings.TrimSpace(value)
 	}
 	return fallback
+}
+
+func getInstallMode() string {
+	mode := strings.ToLower(strings.TrimSpace(getString("REBECCA_NODE_INSTALL_MODE", "docker")))
+	if mode == "" {
+		return "docker"
+	}
+	return mode
 }
 
 func getInt(key string, fallback int) int {

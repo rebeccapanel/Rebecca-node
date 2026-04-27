@@ -505,6 +505,7 @@ func (s *Server) response(extra map[string]any) map[string]any {
 		"started":      s.core.Started(),
 		"core_version": s.core.Version(),
 		"node_version": s.settings.NodeVersion,
+		"install_mode": s.settings.InstallMode,
 	}
 	for key, value := range extra {
 		payload[key] = value
