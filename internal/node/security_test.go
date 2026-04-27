@@ -48,3 +48,41 @@ func TestInstallZipToRejectsZipSlip(t *testing.T) {
 		t.Fatalf("escape file should not exist, stat error: %v", err)
 	}
 }
+
+func TestNodeUpdateArgsSupportsReleaseAndDevChannels(t *testing.T) {
+	tests := []struct {
+		name    string
+		channel string
+		version string
+		want    []string
+	}{
+		{name: "current", want: []string{"update"}},
+		{name: "latest channel", channel: "latest", want: []string{"update", "--version", "latest"}},
+		{name: "dev channel", channel: "dev", want: []string{"update", "--dev"}},
+		{name: "specific version", version: "v1.2.3", want: []string{"update", "--version", "v1.2.3"}},
+		{name: "latest version", version: "latest", want: []string{"update", "--version", "latest"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := nodeUpdateArgs(tt.channel, tt.version)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if len(got) != len(tt.want) {
+				t.Fatalf("expected %v, got %v", tt.want, got)
+			}
+			for i := range got {
+				if got[i] != tt.want[i] {
+					t.Fatalf("expected %v, got %v", tt.want, got)
+				}
+			}
+		})
+	}
+}
+
+func TestNodeUpdateArgsRejectsInvalidChannel(t *testing.T) {
+	if _, err := nodeUpdateArgs("nightly; rm -rf /", ""); err == nil {
+		t.Fatal("expected invalid channel to be rejected")
+	}
+}

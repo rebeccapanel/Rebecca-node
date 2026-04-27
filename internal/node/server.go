@@ -42,6 +42,7 @@ type Server struct {
 }
 
 var xrayVersionPattern = regexp.MustCompile(`^v\d+\.\d+\.\d+(?:[-+._A-Za-z0-9]*)?$`)
+var releaseVersionPattern = regexp.MustCompile(`^v?\d+(?:\.\d+){1,3}(?:[-+._A-Za-z0-9]*)?$`)
 var allowedGeoFiles = map[string]struct{}{"geoip.dat": {}, "geosite.dat": {}}
 
 func New(settings appconfig.Settings) (*Server, error) {
@@ -339,10 +340,23 @@ func (s *Server) handleServiceRestart(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleServiceUpdate(w http.ResponseWriter, r *http.Request) {
-	if !s.matchRequestSession(w, r) {
+	var payload struct {
+		SessionID string `json:"session_id"`
+		Channel   string `json:"channel"`
+		Version   string `json:"version"`
+	}
+	if !decodeJSON(w, r, &payload) {
 		return
 	}
-	if err := s.scheduleNodeCLI("update"); err != nil {
+	if !s.matchSession(w, payload.SessionID) {
+		return
+	}
+	args, err := nodeUpdateArgs(payload.Channel, payload.Version)
+	if err != nil {
+		writeError(w, http.StatusUnprocessableEntity, err.Error())
+		return
+	}
+	if err := s.scheduleNodeCLI(args...); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -706,6 +720,7 @@ func (s *Server) response(extra map[string]any) map[string]any {
 	s.mu.Lock()
 	connected := s.connected
 	s.mu.Unlock()
+	binaryMetadata := s.binaryMetadata()
 	payload := map[string]any{
 		"connected":    connected,
 		"started":      s.core.Started(),
@@ -713,10 +728,73 @@ func (s *Server) response(extra map[string]any) map[string]any {
 		"node_version": s.settings.NodeVersion,
 		"install_mode": s.settings.InstallMode,
 	}
+	if binaryMetadata != nil {
+		payload["binary"] = binaryMetadata
+		if tag, ok := binaryMetadata["tag"].(string); ok && strings.TrimSpace(tag) != "" {
+			payload["node_binary_tag"] = tag
+			payload["binary_tag"] = tag
+			payload["update_channel"] = updateChannelForTag(tag)
+		}
+	}
 	for key, value := range extra {
 		payload[key] = value
 	}
 	return payload
+}
+
+func (s *Server) binaryMetadata() map[string]any {
+	path := strings.TrimSpace(os.Getenv("REBECCA_NODE_BINARY_METADATA_FILE"))
+	if path == "" {
+		path = filepath.Join(s.settings.RebeccaDataDir, ".binary-release.json")
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	var metadata map[string]any
+	if err := json.Unmarshal(raw, &metadata); err != nil {
+		return nil
+	}
+	return metadata
+}
+
+func updateChannelForTag(tag string) string {
+	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(tag)), "dev-") {
+		return "dev"
+	}
+	if strings.TrimSpace(tag) != "" {
+		return "latest"
+	}
+	return "unknown"
+}
+
+func nodeUpdateArgs(channel string, version string) ([]string, error) {
+	args := []string{"update"}
+	normalizedVersion := strings.TrimSpace(version)
+	normalizedChannel := strings.ToLower(strings.TrimSpace(channel))
+	if normalizedVersion != "" {
+		switch normalizedVersion {
+		case "latest":
+			return append(args, "--version", "latest"), nil
+		case "dev":
+			return append(args, "--dev"), nil
+		default:
+			if !releaseVersionPattern.MatchString(normalizedVersion) {
+				return nil, errors.New("invalid update version")
+			}
+			return append(args, "--version", normalizedVersion), nil
+		}
+	}
+	switch normalizedChannel {
+	case "", "current", "auto":
+		return args, nil
+	case "dev":
+		return append(args, "--dev"), nil
+	case "latest", "stable", "release":
+		return append(args, "--version", "latest"), nil
+	default:
+		return nil, errors.New("invalid update channel")
+	}
 }
 
 func detectXrayAsset() (string, error) {
