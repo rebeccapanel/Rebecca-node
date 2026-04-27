@@ -31,6 +31,7 @@ import (
 type Server struct {
 	settings appconfig.Settings
 	core     *xray.Core
+	usage    *usageBuffer
 
 	mu         sync.Mutex
 	connected  bool
@@ -47,7 +48,7 @@ func New(settings appconfig.Settings) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Server{settings: settings, core: core}, nil
+	return &Server{settings: settings, core: core, usage: newUsageBuffer()}, nil
 }
 
 func (s *Server) ListenAndServeTLS() error {
@@ -94,6 +95,10 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("/update_geo", s.handleUpdateGeo)
 	mux.HandleFunc("/service/restart", s.handleServiceRestart)
 	mux.HandleFunc("/service/update", s.handleServiceUpdate)
+	mux.HandleFunc("/usage/users", s.handleUserUsage)
+	mux.HandleFunc("/usage/users/ack", s.handleUserUsageAck)
+	mux.HandleFunc("/usage/outbounds", s.handleOutboundUsage)
+	mux.HandleFunc("/usage/outbounds/ack", s.handleOutboundUsageAck)
 	mux.HandleFunc("/access_logs", s.handleAccessLogs)
 	mux.HandleFunc("/logs", s.handleLogs)
 	return mux
@@ -332,6 +337,80 @@ func (s *Server) handleServiceUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusAccepted, map[string]any{"status": "accepted"})
+}
+
+func (s *Server) handleOutboundUsage(w http.ResponseWriter, r *http.Request) {
+	if !s.matchRequestSession(w, r) {
+		return
+	}
+	if !s.core.Started() {
+		writeError(w, http.StatusServiceUnavailable, "Xray is not started")
+		return
+	}
+	stats, err := xray.QueryOutboundStats(
+		s.settings.XrayAPIHost,
+		s.settings.XrayAPIPort,
+		10*time.Second,
+		true,
+	)
+	if err != nil {
+		writeError(w, http.StatusServiceUnavailable, err.Error())
+		return
+	}
+	batchID, pending := s.usage.addAndSnapshot(stats)
+	writeJSON(w, http.StatusOK, map[string]any{"batch_id": batchID, "stats": pending})
+}
+
+func (s *Server) handleUserUsage(w http.ResponseWriter, r *http.Request) {
+	if !s.matchRequestSession(w, r) {
+		return
+	}
+	if !s.core.Started() {
+		writeError(w, http.StatusServiceUnavailable, "Xray is not started")
+		return
+	}
+	stats, err := xray.QueryUserStats(
+		s.settings.XrayAPIHost,
+		s.settings.XrayAPIPort,
+		30*time.Second,
+		true,
+	)
+	if err != nil {
+		writeError(w, http.StatusServiceUnavailable, err.Error())
+		return
+	}
+	batchID, pending := s.usage.addUsersAndSnapshot(stats)
+	writeJSON(w, http.StatusOK, map[string]any{"batch_id": batchID, "stats": pending})
+}
+
+func (s *Server) handleOutboundUsageAck(w http.ResponseWriter, r *http.Request) {
+	s.handleUsageAck(w, r, s.usage.ack)
+}
+
+func (s *Server) handleUserUsageAck(w http.ResponseWriter, r *http.Request) {
+	s.handleUsageAck(w, r, s.usage.ackUsers)
+}
+
+func (s *Server) handleUsageAck(w http.ResponseWriter, r *http.Request, ack func(string) bool) {
+	var payload struct {
+		SessionID string `json:"session_id"`
+		BatchID   string `json:"batch_id"`
+	}
+	if !decodeJSON(w, r, &payload) {
+		return
+	}
+	if !s.matchSession(w, payload.SessionID) {
+		return
+	}
+	if payload.BatchID == "" {
+		writeError(w, http.StatusUnprocessableEntity, "batch_id is required")
+		return
+	}
+	if !ack(payload.BatchID) {
+		writeError(w, http.StatusNotFound, "batch_id was not found")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"status": "acknowledged"})
 }
 
 func (s *Server) scheduleNodeCLI(args ...string) error {
