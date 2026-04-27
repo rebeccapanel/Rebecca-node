@@ -13,9 +13,11 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"sync"
@@ -24,7 +26,6 @@ import (
 	"github.com/gorilla/websocket"
 	appconfig "github.com/rebeccapanel/rebecca-node/internal/config"
 	"github.com/rebeccapanel/rebecca-node/internal/xray"
-	"gopkg.in/yaml.v3"
 )
 
 type Server struct {
@@ -37,6 +38,9 @@ type Server struct {
 	sessionID  string
 	lastConfig *xray.Config
 }
+
+var xrayVersionPattern = regexp.MustCompile(`^v\d+\.\d+\.\d+(?:[-+._A-Za-z0-9]*)?$`)
+var allowedGeoFiles = map[string]struct{}{"geoip.dat": {}, "geosite.dat": {}}
 
 func New(settings appconfig.Settings) (*Server, error) {
 	core, err := xray.NewCore(settings.XrayExecutablePath, settings.XrayAssetsPath, settings.Debug)
@@ -88,8 +92,8 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("/restart", s.handleRestart)
 	mux.HandleFunc("/update_core", s.handleUpdateCore)
 	mux.HandleFunc("/update_geo", s.handleUpdateGeo)
-	mux.HandleFunc("/maintenance/restart", s.handleMaintenanceRestart)
-	mux.HandleFunc("/maintenance/update", s.handleMaintenanceUpdate)
+	mux.HandleFunc("/service/restart", s.handleServiceRestart)
+	mux.HandleFunc("/service/update", s.handleServiceUpdate)
 	mux.HandleFunc("/access_logs", s.handleAccessLogs)
 	mux.HandleFunc("/logs", s.handleLogs)
 	return mux
@@ -208,8 +212,13 @@ func (s *Server) handleUpdateCore(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSON(w, r, &payload) {
 		return
 	}
-	if strings.TrimSpace(payload.Version) == "" {
+	payload.Version = strings.TrimSpace(payload.Version)
+	if payload.Version == "" {
 		writeError(w, http.StatusUnprocessableEntity, "version is required")
+		return
+	}
+	if !validXrayVersion(payload.Version) {
+		writeError(w, http.StatusUnprocessableEntity, "invalid version")
 		return
 	}
 	asset, err := detectXrayAsset()
@@ -218,6 +227,10 @@ func (s *Server) handleUpdateCore(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	url := fmt.Sprintf("https://github.com/XTLS/Xray-core/releases/download/%s/%s", payload.Version, asset)
+	if err := validatePublicHTTPURL(url); err != nil {
+		writeError(w, http.StatusUnprocessableEntity, err.Error())
+		return
+	}
 	body, err := download(url, 120*time.Second)
 	if err != nil {
 		writeError(w, http.StatusBadGateway, "Download failed: "+err.Error())
@@ -252,9 +265,6 @@ func (s *Server) handleUpdateCore(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	if fileExists("/opt/reb/docker-compose.yml") {
-		_ = updateDockerCompose("/opt/reb/docker-compose.yml", "XRAY_EXECUTABLE_PATH", filepath.Join(s.settings.RebeccaDataDir, "xray-core", "xray"))
-	}
 	writeJSON(w, http.StatusOK, map[string]any{"detail": "Node core ready at " + finalExe, "version": s.core.Version()})
 }
 
@@ -276,10 +286,14 @@ func (s *Server) handleUpdateGeo(w http.ResponseWriter, r *http.Request) {
 	}
 	saved := make([]map[string]string, 0, len(payload.Files))
 	for _, file := range payload.Files {
-		name := strings.TrimSpace(file.Name)
+		name := safeGeoFilename(file.Name)
 		url := strings.TrimSpace(file.URL)
 		if name == "" || url == "" {
 			writeError(w, http.StatusUnprocessableEntity, "Each file must include non-empty 'name' and 'url'.")
+			return
+		}
+		if err := validatePublicHTTPURL(url); err != nil {
+			writeError(w, http.StatusUnprocessableEntity, err.Error())
 			return
 		}
 		body, err := download(url, 120*time.Second)
@@ -287,7 +301,7 @@ func (s *Server) handleUpdateGeo(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadGateway, "Failed to download "+name+": "+err.Error())
 			return
 		}
-		path := filepath.Join(assetsDir, filepath.Base(name))
+		path := filepath.Join(assetsDir, name)
 		if err := os.WriteFile(path, body, 0o644); err != nil {
 			writeError(w, http.StatusInternalServerError, "Failed to save "+name+": "+err.Error())
 			return
@@ -295,24 +309,40 @@ func (s *Server) handleUpdateGeo(w http.ResponseWriter, r *http.Request) {
 		saved = append(saved, map[string]string{"name": name, "path": path})
 	}
 	s.core.SetAssetsPath(assetsDir)
-	if fileExists("/opt/reb/docker-compose.yml") {
-		_ = updateDockerCompose("/opt/reb/docker-compose.yml", "XRAY_ASSETS_PATH", assetsDir)
-	}
 	writeJSON(w, http.StatusOK, map[string]any{"detail": "Geo assets saved to " + assetsDir, "saved": saved})
 }
 
-func (s *Server) handleMaintenanceRestart(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleServiceRestart(w http.ResponseWriter, r *http.Request) {
 	if !s.matchRequestSession(w, r) {
 		return
 	}
-	s.callMaintenance(w, "/restart", 300*time.Second)
+	if err := s.scheduleNodeCLI("restart", "-n"); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]any{"status": "accepted"})
 }
 
-func (s *Server) handleMaintenanceUpdate(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleServiceUpdate(w http.ResponseWriter, r *http.Request) {
 	if !s.matchRequestSession(w, r) {
 		return
 	}
-	s.callMaintenance(w, "/update", 900*time.Second)
+	if err := s.scheduleNodeCLI("update"); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]any{"status": "accepted"})
+}
+
+func (s *Server) scheduleNodeCLI(args ...string) error {
+	cli, err := resolveNodeCLI(s.settings.AppName)
+	if err != nil {
+		return err
+	}
+	cmd := exec.Command(cli, args...)
+	cmd.Stdout = nil
+	cmd.Stderr = nil
+	return cmd.Start()
 }
 
 func (s *Server) handleAccessLogs(w http.ResponseWriter, r *http.Request) {
@@ -482,26 +512,6 @@ func (s *Server) response(extra map[string]any) map[string]any {
 	return payload
 }
 
-func (s *Server) callMaintenance(w http.ResponseWriter, path string, timeout time.Duration) {
-	host := strings.TrimSpace(s.settings.NodeServiceHost)
-	if host == "" {
-		writeError(w, http.StatusServiceUnavailable, "Node maintenance service is not configured on this node.")
-		return
-	}
-	url := fmt.Sprintf("%s://%s:%d%s", emptyDefault(s.settings.NodeServiceScheme, "http"), host, s.settings.NodeServicePort, path)
-	client := http.Client{Timeout: timeout}
-	res, err := client.Post(url, "application/json", nil)
-	if err != nil {
-		writeError(w, http.StatusBadGateway, "Unable to reach node maintenance service: "+err.Error())
-		return
-	}
-	defer res.Body.Close()
-	body, _ := io.ReadAll(res.Body)
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(res.StatusCode)
-	_, _ = w.Write(body)
-}
-
 func detectXrayAsset() (string, error) {
 	if runtime.GOOS != "linux" {
 		return "", errors.New("Unsupported platform for node")
@@ -520,6 +530,63 @@ func detectXrayAsset() (string, error) {
 	}
 }
 
+func validXrayVersion(version string) bool {
+	return xrayVersionPattern.MatchString(strings.TrimSpace(version))
+}
+
+func safeGeoFilename(name string) string {
+	base := filepath.Base(strings.TrimSpace(name))
+	if _, ok := allowedGeoFiles[base]; !ok {
+		return ""
+	}
+	return base
+}
+
+func validatePublicHTTPURL(raw string) error {
+	parsed, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || parsed.Hostname() == "" {
+		return errors.New("url must be a valid http(s) URL")
+	}
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return errors.New("url must use http or https")
+	}
+	addresses, err := net.LookupIP(parsed.Hostname())
+	if err != nil {
+		return fmt.Errorf("url hostname cannot be resolved: %w", err)
+	}
+	for _, address := range addresses {
+		if address.IsPrivate() || address.IsLoopback() || address.IsLinkLocalUnicast() || address.IsLinkLocalMulticast() || address.IsMulticast() || address.IsUnspecified() {
+			return errors.New("url resolves to a private or reserved address")
+		}
+	}
+	return nil
+}
+
+func resolveNodeCLI(appName string) (string, error) {
+	if configured := strings.TrimSpace(os.Getenv("REBECCA_NODE_SCRIPT_BIN")); configured != "" {
+		if fileExists(configured) {
+			return configured, nil
+		}
+	}
+	candidates := []string{}
+	if strings.TrimSpace(appName) != "" {
+		candidates = append(candidates, appName, filepath.Join("/usr/local/bin", appName))
+	}
+	candidates = append(candidates, "rebecca-node", "/usr/local/bin/rebecca-node")
+	for _, candidate := range candidates {
+		if strings.Contains(candidate, string(filepath.Separator)) {
+			if fileExists(candidate) {
+				return candidate, nil
+			}
+			continue
+		}
+		if path, err := exec.LookPath(candidate); err == nil {
+			return path, nil
+		}
+	}
+	return "", errors.New("unable to locate rebecca-node CLI on this host")
+}
+
 func installZipTo(zipBytes []byte, targetDir string) (string, error) {
 	reader, err := zip.NewReader(bytes.NewReader(zipBytes), int64(len(zipBytes)))
 	if err != nil {
@@ -527,7 +594,11 @@ func installZipTo(zipBytes []byte, targetDir string) (string, error) {
 	}
 	var executable string
 	for _, file := range reader.File {
-		name := filepath.Base(file.Name)
+		cleanName := filepath.Clean(file.Name)
+		if filepath.IsAbs(cleanName) || cleanName == ".." || strings.HasPrefix(cleanName, ".."+string(filepath.Separator)) {
+			return "", errors.New("unsafe path in Xray archive")
+		}
+		name := filepath.Base(cleanName)
 		if name == "." || name == string(filepath.Separator) {
 			continue
 		}
@@ -559,53 +630,6 @@ func installZipTo(zipBytes []byte, targetDir string) (string, error) {
 		return "", errors.New("xray binary not found in archive")
 	}
 	return executable, nil
-}
-
-func updateDockerCompose(path, key, value string) error {
-	body, err := os.ReadFile(path)
-	if err != nil {
-		return err
-	}
-	data := map[string]any{}
-	if len(bytes.TrimSpace(body)) > 0 {
-		if err := yaml.Unmarshal(body, &data); err != nil {
-			return err
-		}
-	}
-	services := ensureMap(data, "services")
-	service := ensureMap(services, "rebecca-node")
-	env := ensureMap(service, "environment")
-	env[key] = value
-	volumes, _ := service["volumes"].([]any)
-	assetVolume := "/var/lib/reb/assets:/usr/local/share/xray"
-	found := false
-	for _, item := range volumes {
-		if item == assetVolume {
-			found = true
-			break
-		}
-	}
-	if !found {
-		service["volumes"] = append(volumes, assetVolume)
-	}
-	out, err := yaml.Marshal(data)
-	if err != nil {
-		return err
-	}
-	if err := os.WriteFile(path, out, 0o644); err != nil {
-		return err
-	}
-	cmd := exec.Command("docker-compose", "-f", path, "up", "-d")
-	return cmd.Run()
-}
-
-func ensureMap(parent map[string]any, key string) map[string]any {
-	if child, ok := parent[key].(map[string]any); ok {
-		return child
-	}
-	child := map[string]any{}
-	parent[key] = child
-	return child
 }
 
 func tailFile(path string, maxLines int) ([]string, bool, error) {

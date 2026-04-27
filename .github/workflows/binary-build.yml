@@ -53,11 +53,9 @@ jobs:
 
           ARTIFACT_NAME="rebecca-node-binaries-linux-amd64"
           NODE_ASSET_NAME="rebecca-node-${VERSION}-linux-amd64"
-          SERVICE_ASSET_NAME="rebecca-node-service-${VERSION}-linux-amd64"
 
           echo "artifact_name=${ARTIFACT_NAME}" >> "${GITHUB_OUTPUT}"
           echo "node_asset_name=${NODE_ASSET_NAME}" >> "${GITHUB_OUTPUT}"
-          echo "service_asset_name=${SERVICE_ASSET_NAME}" >> "${GITHUB_OUTPUT}"
           echo "release_tag=${RELEASE_TAG}" >> "${GITHUB_OUTPUT}"
           echo "upload_release=${UPLOAD_RELEASE}" >> "${GITHUB_OUTPUT}"
 
@@ -82,7 +80,6 @@ jobs:
           name: ${{ steps.meta.outputs.artifact_name }}
           path: |
             dist/rebecca-node
-            dist/rebecca-node-service
 
       - name: Upload release asset
         if: steps.meta.outputs.upload_release == 'true'
@@ -93,5 +90,4 @@ jobs:
             gh release create "${{ steps.meta.outputs.release_tag }}" --title "${{ steps.meta.outputs.release_tag }}" --notes "Rebecca-node ${{ steps.meta.outputs.release_tag }}"
           gh release upload "${{ steps.meta.outputs.release_tag }}" \
             "dist/rebecca-node#${{ steps.meta.outputs.node_asset_name }}" \
-            "dist/rebecca-node-service#${{ steps.meta.outputs.service_asset_name }}" \
             --clobber

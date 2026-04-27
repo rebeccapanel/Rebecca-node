@@ -13,6 +13,7 @@ import (
 const NodeVersionFallback = "0.0.4"
 
 type Settings struct {
+	AppName     string
 	ServiceHost string
 	ServicePort int
 
@@ -23,10 +24,7 @@ type Settings struct {
 	XrayAssetsPath     string
 	XrayLogDir         string
 
-	NodeVersion       string
-	NodeServiceScheme string
-	NodeServiceHost   string
-	NodeServicePort   int
+	NodeVersion string
 
 	SSLCertFile       string
 	SSLKeyFile        string
@@ -34,13 +32,6 @@ type Settings struct {
 
 	Debug    bool
 	Inbounds []string
-}
-
-type MaintenanceSettings struct {
-	Host         string
-	Port         int
-	AllowedHosts map[string]struct{}
-	NodeCLI      string
 }
 
 func LoadDotEnv(path string) {
@@ -79,6 +70,7 @@ func Load() Settings {
 	LoadDotEnv(".env")
 	dataDir := getString("REBECCA_DATA_DIR", "/var/lib/rebecca-node")
 	return Settings{
+		AppName:     getString("REBECCA_NODE_APP_NAME", "rebecca-node"),
 		ServiceHost: getString("SERVICE_HOST", "0.0.0.0"),
 		ServicePort: getInt("SERVICE_PORT", 62050),
 
@@ -89,10 +81,7 @@ func Load() Settings {
 		XrayAssetsPath:     resolveXrayAssetsPath(dataDir),
 		XrayLogDir:         strings.TrimSpace(getString("XRAY_LOG_DIR", "")),
 
-		NodeVersion:       getString("NODE_VERSION", NodeVersionFallback),
-		NodeServiceScheme: getString("REBECCA_NODE_SCRIPT_SCHEME", "http"),
-		NodeServiceHost:   getString("REBECCA_NODE_SCRIPT_HOST", "127.0.0.1"),
-		NodeServicePort:   getInt("REBECCA_NODE_SCRIPT_PORT", 3100),
+		NodeVersion: getString("NODE_VERSION", NodeVersionFallback),
 
 		SSLCertFile:       getString("SSL_CERT_FILE", "/var/lib/rebecca-node/ssl_cert.pem"),
 		SSLKeyFile:        getString("SSL_KEY_FILE", "/var/lib/rebecca-node/ssl_key.pem"),
@@ -139,21 +128,6 @@ func executableName(name string) string {
 func fileExists(path string) bool {
 	info, err := os.Stat(path)
 	return err == nil && !info.IsDir()
-}
-
-func LoadMaintenance() MaintenanceSettings {
-	LoadDotEnv(".env")
-	allowed := make(map[string]struct{})
-	for _, host := range getCSVDefault("REBECCA_NODE_SCRIPT_ALLOWED_HOSTS", "127.0.0.1,::1,localhost") {
-		allowed[host] = struct{}{}
-	}
-
-	return MaintenanceSettings{
-		Host:         getString("REBECCA_NODE_SCRIPT_HOST", "127.0.0.1"),
-		Port:         getInt("REBECCA_NODE_SCRIPT_PORT", 3100),
-		AllowedHosts: allowed,
-		NodeCLI:      getString("REBECCA_NODE_SCRIPT_BIN", ""),
-	}
 }
 
 func ParseBool(value string) (bool, error) {

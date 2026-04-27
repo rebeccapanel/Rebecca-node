@@ -26,10 +26,9 @@ Use `help` to view all commands:
 Read the setup guide here: Soon!
 
 ## Runtime
-Rebecca-node is implemented in Go and ships two binaries:
+Rebecca-node is implemented in Go and ships one host-level binary:
 
-- `rebecca-node`: the TLS REST API used by the Rebecca master to control Xray
-- `rebecca-node-service`: the local maintenance API used for node update/restart commands
+- `rebecca-node`: the TLS REST API used by the Rebecca master to control Xray and schedule safe on-host restart/update commands
 
 ## Binary builds
 Linux `amd64` binaries are built for:
@@ -41,7 +40,6 @@ Linux `amd64` binaries are built for:
 Release assets are uploaded as raw executables:
 
 - `rebecca-node-<version>-linux-amd64`
-- `rebecca-node-service-<version>-linux-amd64`
 
 You can also reproduce the CI packaging flow locally:
 

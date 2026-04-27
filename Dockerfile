@@ -9,8 +9,7 @@ COPY . .
 
 ARG TARGETOS=linux
 ARG TARGETARCH=amd64
-RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -ldflags="-s -w" -o /out/rebecca-node ./cmd/rebecca-node \
-    && CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -ldflags="-s -w" -o /out/rebecca-node-service ./cmd/rebecca-node-service
+RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -ldflags="-s -w" -o /out/rebecca-node ./cmd/rebecca-node
 
 FROM debian:bookworm-slim AS xray
 
@@ -26,7 +25,6 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=build /out/rebecca-node /usr/local/bin/rebecca-node
-COPY --from=build /out/rebecca-node-service /usr/local/bin/rebecca-node-service
 COPY --from=xray /usr/local/bin/xray /usr/local/bin/xray
 COPY --from=xray /usr/local/share/xray /usr/local/share/xray
 

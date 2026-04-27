@@ -15,13 +15,15 @@ type target struct {
 
 var targets = []target{
 	{name: "rebecca-node", pkg: "./cmd/rebecca-node"},
-	{name: "rebecca-node-service", pkg: "./cmd/rebecca-node-service"},
 }
 
 func main() {
 	goos := envDefault("REBECCA_NODE_GOOS", runtime.GOOS)
 	goarch := envDefault("REBECCA_NODE_GOARCH", runtime.GOARCH)
 	distDir := filepath.Join(".", "dist")
+	if err := os.RemoveAll(distDir); err != nil {
+		fatal(err)
+	}
 	if err := os.MkdirAll(distDir, 0o755); err != nil {
 		fatal(err)
 	}

@@ -23,7 +23,6 @@ type launched struct {
 
 func main() {
 	nodeBinary := requireBinary("rebecca-node")
-	serviceBinary := requireBinary("rebecca-node-service")
 
 	tempDir, err := os.MkdirTemp("", "rebecca-node-binary-smoke-")
 	if err != nil {
@@ -31,69 +30,11 @@ func main() {
 	}
 	defer os.RemoveAll(tempDir)
 
-	if err := smokeMaintenance(serviceBinary, filepath.Join(tempDir, "service")); err != nil {
-		fatal(err)
-	}
 	if err := smokeNode(nodeBinary, filepath.Join(tempDir, "node")); err != nil {
 		fatal(err)
 	}
 
 	fmt.Println("[smoke-test] Rebecca-node binaries passed smoke tests")
-}
-
-func smokeMaintenance(binaryPath string, tempDir string) error {
-	if err := os.MkdirAll(tempDir, 0o755); err != nil {
-		return err
-	}
-	logFile := filepath.Join(tempDir, "node-cli.log")
-	cli, err := createFakeCLI(tempDir, logFile)
-	if err != nil {
-		return err
-	}
-
-	port := "43100"
-	env := append(os.Environ(),
-		"REBECCA_NODE_SCRIPT_HOST=127.0.0.1",
-		"REBECCA_NODE_SCRIPT_PORT="+port,
-		"REBECCA_NODE_SCRIPT_BIN="+cli,
-	)
-	process, err := launch(binaryPath, env)
-	if err != nil {
-		return err
-	}
-	defer terminate(process)
-
-	if err := waitUntil(func() bool {
-		res, err := http.Get("http://127.0.0.1:" + port + "/health")
-		if err != nil {
-			return false
-		}
-		defer res.Body.Close()
-		return res.StatusCode < 400
-	}, 20*time.Second, process, "Maintenance binary did not become healthy"); err != nil {
-		return err
-	}
-
-	if err := postOK(http.DefaultClient, "http://127.0.0.1:"+port+"/update", nil); err != nil {
-		return err
-	}
-	if err := postOK(http.DefaultClient, "http://127.0.0.1:"+port+"/restart", nil); err != nil {
-		return err
-	}
-
-	body, err := os.ReadFile(logFile)
-	if err != nil {
-		return err
-	}
-	entries := strings.Split(strings.TrimSpace(string(body)), "\n")
-	joined := strings.Join(entries, "\n")
-	if !strings.Contains(joined, "update") {
-		return fmt.Errorf("maintenance binary did not invoke update command: %v", entries)
-	}
-	if !strings.Contains(joined, "restart -n") {
-		return fmt.Errorf("maintenance binary did not invoke restart command: %v", entries)
-	}
-	return nil
 }
 
 func smokeNode(binaryPath string, tempDir string) error {
@@ -116,8 +57,6 @@ func smokeNode(binaryPath string, tempDir string) error {
 		"SSL_CERT_FILE="+certPath,
 		"SSL_KEY_FILE="+keyPath,
 		"SSL_CLIENT_CERT_FILE="+certPath,
-		"REBECCA_NODE_SCRIPT_HOST=127.0.0.1",
-		"REBECCA_NODE_SCRIPT_PORT=43100",
 		"NODE_VERSION=binary-smoke-test",
 	)
 	process, err := launch(binaryPath, env)
@@ -168,20 +107,6 @@ func smokeNode(binaryPath string, tempDir string) error {
 	}
 
 	return postOK(client, "https://127.0.0.1:"+port+"/ping", map[string]string{"session_id": connectPayload.SessionID})
-}
-
-func createFakeCLI(dir, logFile string) (string, error) {
-	if runtime.GOOS == "windows" {
-		path := filepath.Join(dir, "fake-rebecca-node.cmd")
-		content := fmt.Sprintf("@echo off\r\necho %%*>>%q\r\necho ok\r\n", logFile)
-		return path, os.WriteFile(path, []byte(content), 0o755)
-	}
-	path := filepath.Join(dir, "fake-rebecca-node")
-	content := fmt.Sprintf("#!/usr/bin/env bash\nprintf '%%s\\n' \"$*\" >> %q\necho ok\n", logFile)
-	if err := os.WriteFile(path, []byte(content), 0o755); err != nil {
-		return "", err
-	}
-	return path, nil
 }
 
 func createFakeXray(dir string) (string, error) {
