@@ -339,10 +339,29 @@ func (s *Server) scheduleNodeCLI(args ...string) error {
 	if err != nil {
 		return err
 	}
-	cmd := exec.Command(cli, args...)
+	command, commandArgs := hostActionCommand(cli, args...)
+	cmd := exec.Command(command, commandArgs...)
 	cmd.Stdout = nil
 	cmd.Stderr = nil
 	return cmd.Start()
+}
+
+func hostActionCommand(cli string, args ...string) (string, []string) {
+	if runtime.GOOS == "linux" {
+		if systemdRun, err := exec.LookPath("systemd-run"); err == nil {
+			unit := fmt.Sprintf("rebecca-node-host-action-%d", time.Now().UnixNano())
+			commandArgs := []string{
+				"--unit", unit,
+				"--collect",
+				"--description", "Rebecca-node host action",
+				"--",
+				cli,
+			}
+			commandArgs = append(commandArgs, args...)
+			return systemdRun, commandArgs
+		}
+	}
+	return cli, args
 }
 
 func (s *Server) handleAccessLogs(w http.ResponseWriter, r *http.Request) {
