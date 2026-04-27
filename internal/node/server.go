@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"net/url"
@@ -48,7 +49,9 @@ func New(settings appconfig.Settings) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Server{settings: settings, core: core, usage: newUsageBuffer()}, nil
+	server := &Server{settings: settings, core: core, usage: newUsageBuffer()}
+	server.startCachedConfig()
+	return server, nil
 }
 
 func (s *Server) ListenAndServeTLS() error {
@@ -120,16 +123,17 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 	}
 	clientIP := remoteIP(r)
 
+	if s.core.Started() {
+		s.snapshotRunningUsage()
+		s.core.Stop()
+	}
+
 	s.mu.Lock()
-	wasConnected := s.connected
 	s.connected = true
 	s.clientIP = clientIP
 	s.sessionID = sessionID
 	s.mu.Unlock()
 
-	if wasConnected && s.core.Started() {
-		s.core.Stop()
-	}
 	writeJSON(w, http.StatusOK, s.response(map[string]any{"session_id": sessionID}))
 }
 
@@ -140,8 +144,10 @@ func (s *Server) handleDisconnect(w http.ResponseWriter, r *http.Request) {
 	s.sessionID = ""
 	s.mu.Unlock()
 	if s.core.Started() {
+		s.snapshotRunningUsage()
 		s.core.Stop()
 	}
+	s.clearConfigCache()
 	writeJSON(w, http.StatusOK, s.response(nil))
 }
 
@@ -174,6 +180,7 @@ func (s *Server) handleStart(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusServiceUnavailable, strings.Join(s.core.Logs().Snapshot(), "\n"))
 		return
 	}
+	s.saveConfigCache(payload.Config, s.currentClientIP())
 	writeJSON(w, http.StatusOK, s.response(nil))
 }
 
@@ -181,7 +188,9 @@ func (s *Server) handleStop(w http.ResponseWriter, r *http.Request) {
 	if !s.matchRequestSession(w, r) {
 		return
 	}
+	s.snapshotRunningUsage()
 	s.core.Stop()
+	s.clearConfigCache()
 	writeJSON(w, http.StatusOK, s.response(nil))
 }
 
@@ -207,6 +216,7 @@ func (s *Server) handleRestart(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusServiceUnavailable, strings.Join(s.core.Logs().Snapshot(), "\n"))
 		return
 	}
+	s.saveConfigCache(payload.Config, s.currentClientIP())
 	writeJSON(w, http.StatusOK, s.response(nil))
 }
 
@@ -359,6 +369,34 @@ func (s *Server) handleOutboundUsage(w http.ResponseWriter, r *http.Request) {
 	}
 	batchID, pending := s.usage.addAndSnapshot(stats)
 	writeJSON(w, http.StatusOK, map[string]any{"batch_id": batchID, "stats": pending})
+}
+
+func (s *Server) snapshotRunningUsage() {
+	if !s.core.Started() {
+		return
+	}
+	outboundStats, err := xray.QueryOutboundStats(
+		s.settings.XrayAPIHost,
+		s.settings.XrayAPIPort,
+		5*time.Second,
+		true,
+	)
+	if err == nil {
+		s.usage.add(outboundStats)
+	} else {
+		log.Printf("failed to snapshot outbound usage before stopping xray: %v", err)
+	}
+	userStats, err := xray.QueryUserStats(
+		s.settings.XrayAPIHost,
+		s.settings.XrayAPIPort,
+		5*time.Second,
+		true,
+	)
+	if err == nil {
+		s.usage.addUsers(userStats)
+	} else {
+		log.Printf("failed to snapshot user usage before stopping xray: %v", err)
+	}
 }
 
 func (s *Server) handleUserUsage(w http.ResponseWriter, r *http.Request) {
@@ -546,6 +584,76 @@ func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
 type configPayload struct {
 	SessionID string `json:"session_id"`
 	Config    string `json:"config"`
+}
+
+type cachedConfigPayload struct {
+	Config string `json:"config"`
+	PeerIP string `json:"peer_ip"`
+}
+
+func (s *Server) configCachePath() string {
+	return filepath.Join(s.settings.RebeccaDataDir, "xray-config-cache.json")
+}
+
+func (s *Server) saveConfigCache(rawConfig string, peerIP string) {
+	if strings.TrimSpace(rawConfig) == "" {
+		return
+	}
+	payload, err := json.Marshal(cachedConfigPayload{Config: rawConfig, PeerIP: peerIP})
+	if err != nil {
+		return
+	}
+	path := s.configCachePath()
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		log.Printf("failed to create config cache directory: %v", err)
+		return
+	}
+	if err := os.WriteFile(path, payload, 0o600); err != nil {
+		log.Printf("failed to save config cache: %v", err)
+	}
+}
+
+func (s *Server) loadConfigCache() (cachedConfigPayload, bool) {
+	var payload cachedConfigPayload
+	raw, err := os.ReadFile(s.configCachePath())
+	if err != nil {
+		return payload, false
+	}
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return payload, false
+	}
+	if strings.TrimSpace(payload.Config) == "" {
+		return payload, false
+	}
+	if strings.TrimSpace(payload.PeerIP) == "" {
+		payload.PeerIP = "127.0.0.1"
+	}
+	return payload, true
+}
+
+func (s *Server) clearConfigCache() {
+	if err := os.Remove(s.configCachePath()); err != nil && !errors.Is(err, os.ErrNotExist) {
+		log.Printf("failed to clear config cache: %v", err)
+	}
+}
+
+func (s *Server) startCachedConfig() {
+	payload, ok := s.loadConfigCache()
+	if !ok {
+		return
+	}
+	cfg, err := xray.NewConfig(payload.Config, payload.PeerIP, s.settings)
+	if err != nil {
+		log.Printf("failed to decode cached config: %v", err)
+		return
+	}
+	if err := s.core.Start(cfg); err != nil {
+		log.Printf("failed to start cached config: %v", err)
+		return
+	}
+	s.mu.Lock()
+	s.lastConfig = cfg
+	s.mu.Unlock()
 }
 
 type downloadFile struct {

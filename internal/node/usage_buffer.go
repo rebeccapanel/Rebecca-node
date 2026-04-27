@@ -25,10 +25,7 @@ func newUsageBuffer() *usageBuffer {
 	}
 }
 
-func (b *usageBuffer) addAndSnapshot(samples []xray.OutboundStat) (string, []xray.OutboundStat) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-
+func (b *usageBuffer) addOutboundLocked(samples []xray.OutboundStat) {
 	for _, sample := range samples {
 		if sample.Tag == "" || (sample.Up == 0 && sample.Down == 0) {
 			continue
@@ -39,6 +36,20 @@ func (b *usageBuffer) addAndSnapshot(samples []xray.OutboundStat) (string, []xra
 		current.Down += sample.Down
 		b.pending[sample.Tag] = current
 	}
+}
+
+func (b *usageBuffer) add(samples []xray.OutboundStat) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	b.addOutboundLocked(samples)
+}
+
+func (b *usageBuffer) addAndSnapshot(samples []xray.OutboundStat) (string, []xray.OutboundStat) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	b.addOutboundLocked(samples)
 
 	snapshot := make(map[string]xray.OutboundStat, len(b.pending))
 	result := make([]xray.OutboundStat, 0, len(b.pending))
@@ -58,16 +69,27 @@ func (b *usageBuffer) addAndSnapshot(samples []xray.OutboundStat) (string, []xra
 	return batchID, result
 }
 
-func (b *usageBuffer) addUsersAndSnapshot(samples []xray.UserStat) (string, []xray.UserStat) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-
+func (b *usageBuffer) addUsersLocked(samples []xray.UserStat) {
 	for _, sample := range samples {
 		if sample.UID == "" || sample.Value == 0 {
 			continue
 		}
 		b.users[sample.UID] += sample.Value
 	}
+}
+
+func (b *usageBuffer) addUsers(samples []xray.UserStat) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	b.addUsersLocked(samples)
+}
+
+func (b *usageBuffer) addUsersAndSnapshot(samples []xray.UserStat) (string, []xray.UserStat) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	b.addUsersLocked(samples)
 
 	snapshot := make(map[string]int64, len(b.users))
 	result := make([]xray.UserStat, 0, len(b.users))
