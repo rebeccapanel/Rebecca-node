@@ -1,22 +1,32 @@
 # Rebecca-node
 
 ## Quick install
-Install Rebecca-node on your server using this command
+Install Rebecca-node with Docker using this script:
 ```bash
 sudo bash -c "$(curl -sL https://raw.githubusercontent.com/rebeccapanel/Rebecca/dev/scripts/rebecca/rebecca-node.sh)" @ install
 ```
-Install Rebecca-node on your server using this command with custom name:
+Install Rebecca-node with Docker and a custom name:
 ```bash
 sudo bash -c "$(curl -sL https://raw.githubusercontent.com/rebeccapanel/Rebecca/dev/scripts/rebecca/rebecca-node.sh)" @ install --name rebecca-node2
 ```
-Install the dev channel:
+Install Rebecca-node as a native binary service:
+```bash
+sudo bash -c "$(curl -sL https://raw.githubusercontent.com/rebeccapanel/Rebecca/dev/scripts/rebecca/rebecca-node-binary.sh)" @ install
+```
+Install the binary dev channel:
+```bash
+sudo bash -c "$(curl -sL https://raw.githubusercontent.com/rebeccapanel/Rebecca/dev/scripts/rebecca/rebecca-node-binary.sh)" @ install --dev
+```
+Install the Docker dev channel:
 ```bash
 sudo bash -c "$(curl -sL https://raw.githubusercontent.com/rebeccapanel/Rebecca/dev/scripts/rebecca/rebecca-node.sh)" @ install --dev
 ```
-Or you can only install this script (Rebecca-node command) on your server by using this command
+Or you can only install the Docker node script by using this command:
 ```bash
 sudo bash -c "$(curl -sL https://raw.githubusercontent.com/rebeccapanel/Rebecca/dev/scripts/rebecca/rebecca-node.sh)" @ install-script
 ```
+
+The Docker and binary installers are intentionally separate. Use the matching script for update, restart, core update, and script update operations.
 
 Use `help` to view all commands:
 ```Rebecca-node help```
