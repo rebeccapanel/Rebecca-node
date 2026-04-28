@@ -87,9 +87,13 @@ jobs:
         if: steps.meta.outputs.upload_release == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
         run: |
+          set -euo pipefail
+          cp dist/rebecca-node "dist/${{ steps.meta.outputs.node_asset_name }}"
           gh release view "${{ steps.meta.outputs.release_tag }}" >/dev/null 2>&1 || \
             gh release create "${{ steps.meta.outputs.release_tag }}" --title "${{ steps.meta.outputs.release_tag }}" --notes "Rebecca-node ${{ steps.meta.outputs.release_tag }}"
+          gh release delete-asset "${{ steps.meta.outputs.release_tag }}" rebecca-node -y >/dev/null 2>&1 || true
           gh release upload "${{ steps.meta.outputs.release_tag }}" \
-            "dist/rebecca-node#${{ steps.meta.outputs.node_asset_name }}" \
+            "dist/${{ steps.meta.outputs.node_asset_name }}" \
             --clobber
