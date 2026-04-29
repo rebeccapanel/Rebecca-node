@@ -41,15 +41,22 @@ Rebecca-node is implemented in Go and ships one host-level binary:
 - `rebecca-node`: the TLS REST API used by the Rebecca master to control Xray and schedule safe on-host restart/update commands
 
 ## Binary builds
-Linux `amd64` binaries are built for:
+Linux `amd64` and Windows `amd64` binaries are built for:
 
 - every push to `dev`
 - every pull request
 - every published or prereleased GitHub release
 
-Release assets are uploaded as raw executables:
+Release assets are uploaded as raw executables for all supported release targets:
 
+- `rebecca-node-<version>-linux-386`
 - `rebecca-node-<version>-linux-amd64`
+- `rebecca-node-<version>-linux-arm64`
+- `rebecca-node-<version>-linux-armv5`
+- `rebecca-node-<version>-linux-armv6`
+- `rebecca-node-<version>-linux-armv7`
+- `rebecca-node-<version>-linux-s390x`
+- `rebecca-node-<version>-windows-amd64.exe`
 
 You can also reproduce the CI packaging flow locally:
 

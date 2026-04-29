@@ -19,10 +19,35 @@ permissions:
   contents: write
 
 jobs:
-  build-linux-amd64:
+  build-linux:
     runs-on: ubuntu-latest
     env:
       GO_VERSION: "1.22"
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - asset_arch: "386"
+            goarch: "386"
+            goarm: ""
+          - asset_arch: amd64
+            goarch: amd64
+            goarm: ""
+          - asset_arch: arm64
+            goarch: arm64
+            goarm: ""
+          - asset_arch: armv5
+            goarch: arm
+            goarm: "5"
+          - asset_arch: armv6
+            goarch: arm
+            goarm: "6"
+          - asset_arch: armv7
+            goarch: arm
+            goarm: "7"
+          - asset_arch: s390x
+            goarch: s390x
+            goarm: ""
 
     steps:
       - name: Checkout
@@ -53,47 +78,163 @@ jobs:
             UPLOAD_RELEASE="false"
           fi
 
-          ARTIFACT_NAME="rebecca-node-binaries-linux-amd64"
-          NODE_ASSET_NAME="rebecca-node-${VERSION}-linux-amd64"
+          SHOULD_BUILD="false"
+          if [[ "${UPLOAD_RELEASE}" == "true" || "${{ github.event_name }}" == "workflow_dispatch" || "${{ matrix.asset_arch }}" == "amd64" ]]; then
+            SHOULD_BUILD="true"
+          fi
+
+          ARTIFACT_NAME="rebecca-node-binaries-linux-${{ matrix.asset_arch }}"
+          NODE_ASSET_NAME="rebecca-node-${VERSION}-linux-${{ matrix.asset_arch }}"
 
           echo "artifact_name=${ARTIFACT_NAME}" >> "${GITHUB_OUTPUT}"
           echo "node_asset_name=${NODE_ASSET_NAME}" >> "${GITHUB_OUTPUT}"
           echo "release_tag=${RELEASE_TAG}" >> "${GITHUB_OUTPUT}"
-          echo "upload_release=${UPLOAD_RELEASE}" >> "${GITHUB_OUTPUT}"
+          echo "should_build=${SHOULD_BUILD}" >> "${GITHUB_OUTPUT}"
 
       - name: Set up Go
+        if: steps.meta.outputs.should_build == 'true'
         uses: actions/setup-go@v5
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
 
-      - name: Build binaries
+      - name: Build binary
+        if: steps.meta.outputs.should_build == 'true'
         env:
           REBECCA_NODE_GOOS: linux
-          REBECCA_NODE_GOARCH: amd64
+          REBECCA_NODE_GOARCH: ${{ matrix.goarch }}
+          REBECCA_NODE_GOARM: ${{ matrix.goarm }}
         run: go run ./tools/build
 
-      - name: Smoke test binaries
+      - name: Smoke test binary
+        if: steps.meta.outputs.should_build == 'true' && matrix.asset_arch == 'amd64'
         run: go run ./tools/smoke
 
+      - name: Prepare artifact
+        if: steps.meta.outputs.should_build == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mv dist/rebecca-node "dist/${{ steps.meta.outputs.node_asset_name }}"
+          sha256sum "dist/${{ steps.meta.outputs.node_asset_name }}" > "dist/${{ steps.meta.outputs.node_asset_name }}.sha256"
+
       - name: Upload artifact
+        if: steps.meta.outputs.should_build == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: ${{ steps.meta.outputs.artifact_name }}
           path: |
-            dist/rebecca-node
+            dist/${{ steps.meta.outputs.node_asset_name }}
+            dist/${{ steps.meta.outputs.node_asset_name }}.sha256
 
-      - name: Upload release asset
-        if: steps.meta.outputs.upload_release == 'true'
+  build-windows-amd64:
+    runs-on: windows-latest
+    env:
+      GO_VERSION: "1.22"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve build metadata
+        id: meta
+        shell: pwsh
+        run: |
+          if ("${{ github.event_name }}" -eq "release") {
+            $version = "${{ github.event.release.tag_name }}"
+            $releaseTag = "${{ github.event.release.tag_name }}"
+            $shouldBuild = "true"
+          } elseif ("${env:GITHUB_REF_TYPE}" -eq "tag") {
+            $version = "${env:GITHUB_REF_NAME}"
+            $releaseTag = "${env:GITHUB_REF_NAME}"
+            $shouldBuild = "true"
+          } elseif ("${{ github.event_name }}" -eq "pull_request") {
+            $version = "pr-${{ github.event.pull_request.number }}-$($env:GITHUB_SHA.Substring(0, 7))"
+            $releaseTag = ""
+            $shouldBuild = "false"
+          } else {
+            $refSlug = "${env:GITHUB_REF_NAME}" -replace "[/\s]", "-"
+            $refSlug = $refSlug -replace "[^A-Za-z0-9._-]", ""
+            $version = "$refSlug-$($env:GITHUB_SHA.Substring(0, 7))"
+            $releaseTag = ""
+            $shouldBuild = "true"
+          }
+
+          "artifact_name=rebecca-node-binaries-windows-amd64" >> $env:GITHUB_OUTPUT
+          "node_asset_name=rebecca-node-$version-windows-amd64.exe" >> $env:GITHUB_OUTPUT
+          "release_tag=$releaseTag" >> $env:GITHUB_OUTPUT
+          "should_build=$shouldBuild" >> $env:GITHUB_OUTPUT
+
+      - name: Set up Go
+        if: steps.meta.outputs.should_build == 'true'
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: Build binary
+        if: steps.meta.outputs.should_build == 'true'
+        env:
+          REBECCA_NODE_GOOS: windows
+          REBECCA_NODE_GOARCH: amd64
+        run: go run ./tools/build
+
+      - name: Smoke test binary
+        if: steps.meta.outputs.should_build == 'true'
+        run: go run ./tools/smoke
+
+      - name: Prepare artifact
+        if: steps.meta.outputs.should_build == 'true'
+        shell: pwsh
+        run: |
+          Move-Item -LiteralPath dist\rebecca-node.exe -Destination "dist\${{ steps.meta.outputs.node_asset_name }}"
+          $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath "dist\${{ steps.meta.outputs.node_asset_name }}").Hash.ToLowerInvariant()
+          "$hash  ${{ steps.meta.outputs.node_asset_name }}" | Set-Content -NoNewline -Path "dist\${{ steps.meta.outputs.node_asset_name }}.sha256"
+
+      - name: Upload artifact
+        if: steps.meta.outputs.should_build == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.meta.outputs.artifact_name }}
+          path: |
+            dist/${{ steps.meta.outputs.node_asset_name }}
+            dist/${{ steps.meta.outputs.node_asset_name }}.sha256
+
+  publish-release:
+    runs-on: ubuntu-latest
+    needs:
+      - build-linux
+      - build-windows-amd64
+    if: github.event_name == 'release' || github.ref_type == 'tag'
+
+    steps:
+      - name: Resolve release tag
+        id: meta
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${{ github.event_name }}" == "release" ]]; then
+            RELEASE_TAG="${{ github.event.release.tag_name }}"
+          else
+            RELEASE_TAG="${GITHUB_REF_NAME}"
+          fi
+          echo "release_tag=${RELEASE_TAG}" >> "${GITHUB_OUTPUT}"
+
+      - name: Download release artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: rebecca-node-binaries-*
+          path: release-assets
+          merge-multiple: true
+
+      - name: Upload release assets
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash
         run: |
           set -euo pipefail
-          cp dist/rebecca-node "dist/${{ steps.meta.outputs.node_asset_name }}"
-          gh release view "${{ steps.meta.outputs.release_tag }}" >/dev/null 2>&1 || \
-            gh release create "${{ steps.meta.outputs.release_tag }}" --title "${{ steps.meta.outputs.release_tag }}" --notes "Rebecca-node ${{ steps.meta.outputs.release_tag }}"
-          gh release delete-asset "${{ steps.meta.outputs.release_tag }}" rebecca-node -y >/dev/null 2>&1 || true
-          gh release upload "${{ steps.meta.outputs.release_tag }}" \
-            "dist/${{ steps.meta.outputs.node_asset_name }}" \
-            --clobber
+          RELEASE_TAG="${{ steps.meta.outputs.release_tag }}"
+          gh release view "${RELEASE_TAG}" >/dev/null 2>&1 || \
+            gh release create "${RELEASE_TAG}" --title "${RELEASE_TAG}" --notes "Rebecca Node ${RELEASE_TAG}"
+          gh release delete-asset "${RELEASE_TAG}" rebecca-node -y >/dev/null 2>&1 || true
+          gh release upload "${RELEASE_TAG}" release-assets/rebecca-node-* --clobber

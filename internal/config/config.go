@@ -10,7 +10,7 @@ import (
 	"strings"
 )
 
-const NodeVersionFallback = "0.0.5"
+const NodeVersionFallback = "0.1.1"
 
 type Settings struct {
 	AppName     string

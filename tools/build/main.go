@@ -20,6 +20,7 @@ var targets = []target{
 func main() {
 	goos := envDefault("REBECCA_NODE_GOOS", runtime.GOOS)
 	goarch := envDefault("REBECCA_NODE_GOARCH", runtime.GOARCH)
+	goarm := os.Getenv("REBECCA_NODE_GOARM")
 	distDir := filepath.Join(".", "dist")
 	if err := os.RemoveAll(distDir); err != nil {
 		fatal(err)
@@ -30,9 +31,16 @@ func main() {
 
 	for _, item := range targets {
 		output := filepath.Join(distDir, item.name+suffix(goos))
-		fmt.Printf("[build-binary] Building %s from %s for %s/%s\n", item.name, item.pkg, goos, goarch)
+		targetLabel := goos + "/" + goarch
+		if goarm != "" {
+			targetLabel += "/v" + goarm
+		}
+		fmt.Printf("[build-binary] Building %s from %s for %s\n", item.name, item.pkg, targetLabel)
 		cmd := exec.Command("go", "build", "-trimpath", "-ldflags", "-s -w", "-o", output, item.pkg)
 		cmd.Env = append(os.Environ(), "GOOS="+goos, "GOARCH="+goarch, "CGO_ENABLED=0")
+		if goarm != "" {
+			cmd.Env = append(cmd.Env, "GOARM="+goarm)
+		}
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
 		if err := cmd.Run(); err != nil {
