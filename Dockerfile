@@ -1,31 +1,33 @@
-ARG PYTHON_VERSION=3.12
+FROM golang:1.22-bookworm AS build
 
-FROM python:$PYTHON_VERSION-slim AS build
+WORKDIR /src
 
-ENV PYTHONUNBUFFERED=1
+COPY go.mod go.sum* ./
+RUN go mod download
 
-WORKDIR /code
+COPY . .
+
+ARG TARGETOS=linux
+ARG TARGETARCH=amd64
+RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -ldflags="-s -w" -o /out/rebecca-node ./cmd/rebecca-node
+
+FROM debian:bookworm-slim AS xray
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends build-essential curl unzip gcc python3-dev libpq-dev \
-    && curl -L https://github.com/rebeccapanel/Rebecca-scripts/raw/master/install_latest_xray.sh | bash \
+    && apt-get install -y --no-install-recommends ca-certificates curl unzip bash \
+    && curl -L https://raw.githubusercontent.com/rebeccapanel/Rebecca/dev/scripts/rebecca/install_latest_xray.sh | bash \
     && rm -rf /var/lib/apt/lists/*
 
-COPY ./requirements.txt /code/
-RUN python3 -m pip install --upgrade pip setuptools \
-    && pip install --no-cache-dir --upgrade -r /code/requirements.txt
+FROM debian:bookworm-slim
 
-FROM python:$PYTHON_VERSION-slim
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
 
-ENV PYTHON_LIB_PATH=/usr/local/lib/python${PYTHON_VERSION%.*}/site-packages
+COPY --from=build /out/rebecca-node /usr/local/bin/rebecca-node
+COPY --from=xray /usr/local/bin/xray /usr/local/bin/xray
+COPY --from=xray /usr/local/share/xray /usr/local/share/xray
+
 WORKDIR /code
 
-RUN rm -rf $PYTHON_LIB_PATH/*
-
-COPY --from=build $PYTHON_LIB_PATH $PYTHON_LIB_PATH
-COPY --from=build /usr/local/bin /usr/local/bin
-COPY --from=build /usr/local/share/xray /usr/local/share/xray
-
-COPY . /code
-
-CMD ["bash", "-c", "python main.py"]
+CMD ["rebecca-node"]

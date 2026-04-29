@@ -4,7 +4,7 @@ Documentation=https://github.com/rebeccapanel/Rebecca-node
 After=network.target nss-lookup.target
 
 [Service]
-ExecStart=/usr/bin/env python3 /var/lib/rebecca-node/main.py
+ExecStart=/usr/local/bin/rebecca-node
 Restart=on-failure
 WorkingDirectory=/var/lib/rebecca-node
 
