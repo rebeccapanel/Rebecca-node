@@ -14,6 +14,7 @@ import (
 )
 
 type Core struct {
+	lifecycleMu    sync.Mutex
 	mu             sync.Mutex
 	executablePath string
 	assetsPath     string
@@ -92,6 +93,12 @@ func (c *Core) Started() bool {
 }
 
 func (c *Core) Start(config *Config) error {
+	c.lifecycleMu.Lock()
+	defer c.lifecycleMu.Unlock()
+	return c.start(config)
+}
+
+func (c *Core) start(config *Config) error {
 	c.mu.Lock()
 	if c.running {
 		c.mu.Unlock()
@@ -160,6 +167,12 @@ func (c *Core) Start(config *Config) error {
 }
 
 func (c *Core) Stop() {
+	c.lifecycleMu.Lock()
+	defer c.lifecycleMu.Unlock()
+	c.stop()
+}
+
+func (c *Core) stop() {
 	c.mu.Lock()
 	cmd := c.cmd
 	c.cmd = nil
@@ -172,8 +185,10 @@ func (c *Core) Stop() {
 }
 
 func (c *Core) Restart(config *Config) error {
-	c.Stop()
-	return c.Start(config)
+	c.lifecycleMu.Lock()
+	defer c.lifecycleMu.Unlock()
+	c.stop()
+	return c.start(config)
 }
 
 func (c *Core) capture(pipe interface{ Read([]byte) (int, error) }) {

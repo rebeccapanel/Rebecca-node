@@ -37,9 +37,11 @@ type Server struct {
 	mu         sync.Mutex
 	connected  bool
 	clientIP   string
-	sessionID  string
+	sessions   map[string]time.Time
 	lastConfig *xray.Config
 }
+
+const sessionTTL = 30 * time.Minute
 
 var xrayVersionPattern = regexp.MustCompile(`^v\d+\.\d+\.\d+(?:[-+._A-Za-z0-9]*)?$`)
 var releaseVersionPattern = regexp.MustCompile(`^v?\d+(?:\.\d+){1,3}(?:[-+._A-Za-z0-9]*)?$`)
@@ -50,7 +52,12 @@ func New(settings appconfig.Settings) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	server := &Server{settings: settings, core: core, usage: newUsageBuffer()}
+	usage, err := newPersistentUsageBuffer(filepath.Join(settings.RebeccaDataDir, "usage-spool.json"))
+	if err != nil {
+		log.Printf("failed to load usage spool, starting with an empty usage buffer: %v", err)
+		usage = newUsageBuffer()
+	}
+	server := &Server{settings: settings, core: core, usage: usage, sessions: make(map[string]time.Time)}
 	server.startCachedConfig()
 	return server, nil
 }
@@ -103,6 +110,12 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("/usage/users/ack", s.handleUserUsageAck)
 	mux.HandleFunc("/usage/outbounds", s.handleOutboundUsage)
 	mux.HandleFunc("/usage/outbounds/ack", s.handleOutboundUsageAck)
+	mux.HandleFunc("/inbounds/users/add", s.handleAddInboundUser)
+	mux.HandleFunc("/inbounds/users/remove", s.handleRemoveInboundUser)
+	mux.HandleFunc("/helpers/x25519", s.handleX25519)
+	mux.HandleFunc("/helpers/mldsa65", s.handleMLDSA65)
+	mux.HandleFunc("/helpers/ech", s.handleECH)
+	mux.HandleFunc("/outbounds/test", s.handleOutboundTest)
 	mux.HandleFunc("/access_logs", s.handleAccessLogs)
 	mux.HandleFunc("/logs", s.handleLogs)
 	return mux
@@ -124,25 +137,19 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 	}
 	clientIP := remoteIP(r)
 
-	if s.core.Started() {
-		s.snapshotRunningUsage()
-		s.core.Stop()
-	}
-
-	s.mu.Lock()
-	s.connected = true
-	s.clientIP = clientIP
-	s.sessionID = sessionID
-	s.mu.Unlock()
+	s.addSession(sessionID, clientIP)
 
 	writeJSON(w, http.StatusOK, s.response(map[string]any{"session_id": sessionID}))
 }
 
 func (s *Server) handleDisconnect(w http.ResponseWriter, r *http.Request) {
+	if !s.matchRequestSession(w, r) {
+		return
+	}
 	s.mu.Lock()
 	s.connected = false
 	s.clientIP = ""
-	s.sessionID = ""
+	s.sessions = make(map[string]time.Time)
 	s.mu.Unlock()
 	if s.core.Started() {
 		s.snapshotRunningUsage()
@@ -367,19 +374,19 @@ func (s *Server) handleOutboundUsage(w http.ResponseWriter, r *http.Request) {
 	if !s.matchRequestSession(w, r) {
 		return
 	}
-	if !s.core.Started() {
-		writeError(w, http.StatusServiceUnavailable, "Xray is not started")
-		return
-	}
-	stats, err := xray.QueryOutboundStats(
-		s.settings.XrayAPIHost,
-		s.settings.XrayAPIPort,
-		10*time.Second,
-		true,
-	)
-	if err != nil {
-		writeError(w, http.StatusServiceUnavailable, err.Error())
-		return
+	var stats []xray.OutboundStat
+	if s.core.Started() {
+		var err error
+		stats, err = xray.QueryOutboundStats(
+			s.settings.XrayAPIHost,
+			s.settings.XrayAPIPort,
+			10*time.Second,
+			true,
+		)
+		if err != nil {
+			writeError(w, http.StatusServiceUnavailable, err.Error())
+			return
+		}
 	}
 	batchID, pending := s.usage.addAndSnapshot(stats)
 	writeJSON(w, http.StatusOK, map[string]any{"batch_id": batchID, "stats": pending})
@@ -417,19 +424,19 @@ func (s *Server) handleUserUsage(w http.ResponseWriter, r *http.Request) {
 	if !s.matchRequestSession(w, r) {
 		return
 	}
-	if !s.core.Started() {
-		writeError(w, http.StatusServiceUnavailable, "Xray is not started")
-		return
-	}
-	stats, err := xray.QueryUserStats(
-		s.settings.XrayAPIHost,
-		s.settings.XrayAPIPort,
-		30*time.Second,
-		true,
-	)
-	if err != nil {
-		writeError(w, http.StatusServiceUnavailable, err.Error())
-		return
+	var stats []xray.UserStat
+	if s.core.Started() {
+		var err error
+		stats, err = xray.QueryUserStats(
+			s.settings.XrayAPIHost,
+			s.settings.XrayAPIPort,
+			30*time.Second,
+			true,
+		)
+		if err != nil {
+			writeError(w, http.StatusServiceUnavailable, err.Error())
+			return
+		}
 	}
 	batchID, pending := s.usage.addUsersAndSnapshot(stats)
 	writeJSON(w, http.StatusOK, map[string]any{"batch_id": batchID, "stats": pending})
@@ -707,7 +714,17 @@ func (s *Server) matchSession(w http.ResponseWriter, sessionID string) bool {
 func (s *Server) sessionMatches(sessionID string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return sessionID != "" && sessionID == s.sessionID
+	if sessionID == "" {
+		return false
+	}
+	now := time.Now()
+	s.pruneSessionsLocked(now)
+	if _, ok := s.sessions[sessionID]; !ok {
+		return false
+	}
+	s.sessions[sessionID] = now
+	s.connected = true
+	return true
 }
 
 func (s *Server) currentClientIP() string {
@@ -716,9 +733,34 @@ func (s *Server) currentClientIP() string {
 	return s.clientIP
 }
 
+func (s *Server) addSession(sessionID string, clientIP string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := time.Now()
+	if s.sessions == nil {
+		s.sessions = make(map[string]time.Time)
+	}
+	s.pruneSessionsLocked(now)
+	s.connected = true
+	s.clientIP = clientIP
+	s.sessions[sessionID] = now
+}
+
+func (s *Server) pruneSessionsLocked(now time.Time) {
+	for sessionID, seenAt := range s.sessions {
+		if now.Sub(seenAt) > sessionTTL {
+			delete(s.sessions, sessionID)
+		}
+	}
+	if len(s.sessions) == 0 {
+		s.connected = false
+	}
+}
+
 func (s *Server) response(extra map[string]any) map[string]any {
 	s.mu.Lock()
-	connected := s.connected
+	s.pruneSessionsLocked(time.Now())
+	connected := s.connected && len(s.sessions) > 0
 	s.mu.Unlock()
 	binaryMetadata := s.binaryMetadata()
 	payload := map[string]any{

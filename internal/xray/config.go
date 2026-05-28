@@ -83,18 +83,7 @@ func (c *Config) applyAPI() {
 		"port":     c.settings.XrayAPIPort,
 		"protocol": "dokodemo-door",
 		"settings": map[string]any{"address": "127.0.0.1"},
-		"streamSettings": map[string]any{
-			"security": "tls",
-			"tlsSettings": map[string]any{
-				"certificates": []any{
-					map[string]any{
-						"certificateFile": c.settings.SSLCertFile,
-						"keyFile":         c.settings.SSLKeyFile,
-					},
-				},
-			},
-		},
-		"tag": "API_INBOUND",
+		"tag":      "API_INBOUND",
 	}
 	inbounds, _ := c.data["inbounds"].([]any)
 	c.data["inbounds"] = append([]any{inbound}, inbounds...)
