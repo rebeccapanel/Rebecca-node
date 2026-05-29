@@ -33,6 +33,7 @@ type Server struct {
 	settings appconfig.Settings
 	core     *xray.Core
 	usage    *usageBuffer
+	system   *systemSampler
 
 	mu         sync.Mutex
 	connected  bool
@@ -57,7 +58,13 @@ func New(settings appconfig.Settings) (*Server, error) {
 		log.Printf("failed to load usage spool, starting with an empty usage buffer: %v", err)
 		usage = newUsageBuffer()
 	}
-	server := &Server{settings: settings, core: core, usage: usage, sessions: make(map[string]time.Time)}
+	server := &Server{
+		settings: settings,
+		core:     core,
+		usage:    usage,
+		system:   newSystemSampler(),
+		sessions: make(map[string]time.Time),
+	}
 	server.startCachedConfig()
 	return server, nil
 }
@@ -769,6 +776,9 @@ func (s *Server) response(extra map[string]any) map[string]any {
 		"core_version": s.core.Version(),
 		"node_version": s.settings.NodeVersion,
 		"install_mode": s.settings.InstallMode,
+	}
+	if s.system != nil {
+		payload["system"] = s.system.Snapshot()
 	}
 	if binaryMetadata != nil {
 		payload["binary"] = binaryMetadata
