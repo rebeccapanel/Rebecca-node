@@ -1,0 +1,189 @@
+syntax = "proto3";
+
+package rebecca.node.v1;
+
+option go_package = "github.com/rebeccapanel/rebecca-node/internal/proto/node/v1;nodev1";
+
+service NodeControlService {
+  rpc Hello(HelloRequest) returns (HelloResponse);
+  rpc Connect(ConnectRequest) returns (ConnectResponse);
+  rpc Health(HealthRequest) returns (HealthResponse);
+}
+
+service NodeRuntimeService {
+  rpc StartRuntime(RuntimeConfigRequest) returns (RuntimeActionResponse);
+  rpc RestartRuntime(RuntimeConfigRequest) returns (RuntimeActionResponse);
+  rpc StopRuntime(StopRuntimeRequest) returns (RuntimeActionResponse);
+  rpc SyncConfig(RuntimeConfigRequest) returns (RuntimeActionResponse);
+  rpc AddUser(InboundUserRequest) returns (RuntimeActionResponse);
+  rpc UpdateUser(InboundUserRequest) returns (RuntimeActionResponse);
+  rpc RemoveUser(RemoveInboundUserRequest) returns (RuntimeActionResponse);
+  rpc Metrics(MetricsRequest) returns (MetricsResponse);
+}
+
+service NodeUsageService {
+  rpc CollectUserUsage(CollectUsageRequest) returns (UserUsageBatch);
+  rpc AckUserUsage(AckUsageRequest) returns (AckUsageResponse);
+  rpc CollectOutboundUsage(CollectUsageRequest) returns (OutboundUsageBatch);
+  rpc AckOutboundUsage(AckUsageRequest) returns (AckUsageResponse);
+}
+
+service NodeLogsService {
+  rpc StreamLogs(StreamLogsRequest) returns (stream LogLine);
+}
+
+message Empty {}
+
+message HelloRequest {
+  string master_id = 1;
+  string master_version = 2;
+}
+
+message HelloResponse {
+  string node_id = 1;
+  string node_name = 2;
+  string node_version = 3;
+  string install_mode = 4;
+  string update_channel = 5;
+  RuntimeState runtime = 6;
+}
+
+message ConnectRequest {
+  string master_id = 1;
+  string master_version = 2;
+  string expected_node_name = 3;
+}
+
+message ConnectResponse {
+  string connection_id = 1;
+  RuntimeState runtime = 2;
+}
+
+message HealthRequest {
+  bool include_metrics = 1;
+}
+
+message HealthResponse {
+  RuntimeState runtime = 1;
+  MetricsResponse metrics = 2;
+}
+
+message RuntimeState {
+  bool connected = 1;
+  bool started = 2;
+  string core_version = 3;
+  string node_version = 4;
+  string install_mode = 5;
+  string update_channel = 6;
+  string message = 7;
+}
+
+message RuntimeConfigRequest {
+  string operation_id = 1;
+  string config_json = 2;
+  bool include_db_users = 3;
+}
+
+message StopRuntimeRequest {
+  string operation_id = 1;
+  bool collect_usage_before_stop = 2;
+}
+
+message RuntimeActionResponse {
+  string operation_id = 1;
+  bool accepted = 2;
+  RuntimeState runtime = 3;
+  string message = 4;
+}
+
+message InboundUserRequest {
+  string operation_id = 1;
+  string inbound_tag = 2;
+  InboundUser user = 3;
+}
+
+message RemoveInboundUserRequest {
+  string operation_id = 1;
+  string inbound_tag = 2;
+  string email = 3;
+}
+
+message InboundUser {
+  string email = 1;
+  string protocol = 2;
+  map<string, string> fields = 3;
+}
+
+message MetricsRequest {
+  bool include_runtime = 1;
+}
+
+message MetricsResponse {
+  RuntimeState runtime = 1;
+  SystemMetrics system = 2;
+  TransferMetrics transfer = 3;
+  int64 sampled_at_unix = 4;
+}
+
+message SystemMetrics {
+  int32 cpu_cores = 1;
+  double cpu_frequency_hz = 2;
+  double cpu_usage_percent = 3;
+  uint64 memory_used = 4;
+  uint64 memory_total = 5;
+  double memory_usage_percent = 6;
+}
+
+message TransferMetrics {
+  uint64 uplink_total = 1;
+  uint64 downlink_total = 2;
+  uint64 upload_speed = 3;
+  uint64 download_speed = 4;
+}
+
+message CollectUsageRequest {
+  string collector_id = 1;
+  bool reset = 2;
+}
+
+message UserUsageBatch {
+  string batch_id = 1;
+  repeated UserUsageSample stats = 2;
+}
+
+message UserUsageSample {
+  string uid = 1;
+  uint64 value = 2;
+}
+
+message OutboundUsageBatch {
+  string batch_id = 1;
+  repeated OutboundUsageSample stats = 2;
+}
+
+message OutboundUsageSample {
+  string tag = 1;
+  uint64 up = 2;
+  uint64 down = 3;
+}
+
+message AckUsageRequest {
+  string batch_id = 1;
+}
+
+message AckUsageResponse {
+  string batch_id = 1;
+  bool acknowledged = 2;
+}
+
+message StreamLogsRequest {
+  string stream_id = 1;
+  uint32 max_lines = 2;
+  double flush_interval_seconds = 3;
+}
+
+message LogLine {
+  string stream_id = 1;
+  string line = 2;
+  int64 emitted_at_unix = 3;
+}
