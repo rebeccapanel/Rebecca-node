@@ -9,6 +9,7 @@ import (
 	"log"
 	"net"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -201,6 +202,42 @@ func (api *grpcAPI) Metrics(ctx context.Context, _ *nodev1.MetricsRequest) (*nod
 	return api.server.grpcMetrics("metrics"), nil
 }
 
+func (api *grpcAPI) UpdateRuntime(ctx context.Context, req *nodev1.RuntimeUpdateRequest) (*nodev1.RuntimeActionResponse, error) {
+	if err := api.server.grpcUpdateRuntime(req.GetVersion()); err != nil {
+		return nil, err
+	}
+	return api.server.grpcAction(req.GetOperationId(), true, "runtime updated"), nil
+}
+
+func (api *grpcAPI) UpdateGeo(ctx context.Context, req *nodev1.GeoUpdateRequest) (*nodev1.RuntimeActionResponse, error) {
+	files := make([]downloadFile, 0, len(req.GetFiles()))
+	for _, file := range req.GetFiles() {
+		files = append(files, downloadFile{Name: file.GetName(), URL: file.GetUrl()})
+	}
+	if err := api.server.grpcUpdateGeo(files); err != nil {
+		return nil, err
+	}
+	return api.server.grpcAction(req.GetOperationId(), true, "geo assets updated"), nil
+}
+
+func (api *grpcAPI) RestartService(ctx context.Context, req *nodev1.ServiceRestartRequest) (*nodev1.RuntimeActionResponse, error) {
+	if err := api.server.scheduleNodeCLI("restart", "-n"); err != nil {
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+	return api.server.grpcAction(req.GetOperationId(), true, "service restart scheduled"), nil
+}
+
+func (api *grpcAPI) UpdateService(ctx context.Context, req *nodev1.ServiceUpdateRequest) (*nodev1.RuntimeActionResponse, error) {
+	args, err := nodeUpdateArgs(req.GetChannel(), req.GetVersion())
+	if err != nil {
+		return nil, status.Error(codes.InvalidArgument, err.Error())
+	}
+	if err := api.server.scheduleNodeCLI(args...); err != nil {
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+	return api.server.grpcAction(req.GetOperationId(), true, "service update scheduled"), nil
+}
+
 func (api *grpcAPI) CollectUserUsage(ctx context.Context, req *nodev1.CollectUsageRequest) (*nodev1.UserUsageBatch, error) {
 	var stats []xray.UserStat
 	if api.server.core.Started() {
@@ -357,6 +394,83 @@ func (s *Server) grpcAddUser(req *nodev1.InboundUserRequest, message string) (*n
 		return nil, status.Error(codes.Unavailable, err.Error())
 	}
 	return s.grpcAction(req.GetOperationId(), true, message), nil
+}
+
+func (s *Server) grpcUpdateRuntime(version string) error {
+	version = strings.TrimSpace(version)
+	if version == "" {
+		return status.Error(codes.InvalidArgument, "version is required")
+	}
+	if !validXrayVersion(version) {
+		return status.Error(codes.InvalidArgument, "invalid version")
+	}
+	asset, err := detectXrayAsset()
+	if err != nil {
+		return status.Error(codes.FailedPrecondition, err.Error())
+	}
+	url := fmt.Sprintf("https://github.com/XTLS/Xray-core/releases/download/%s/%s", version, asset)
+	if err := validatePublicHTTPURL(url); err != nil {
+		return status.Error(codes.InvalidArgument, err.Error())
+	}
+	body, err := download(url, 120*time.Second)
+	if err != nil {
+		return status.Error(codes.Unavailable, "download failed: "+err.Error())
+	}
+	baseDir := filepath.Join(s.settings.RebeccaDataDir, "xray-core")
+	if err := os.MkdirAll(baseDir, 0o755); err != nil {
+		return status.Error(codes.Internal, err.Error())
+	}
+	if s.core.Started() {
+		s.snapshotRunningUsage()
+		s.core.Stop()
+	}
+	extracted, err := installZipTo(body, baseDir)
+	if err != nil {
+		return status.Error(codes.Internal, err.Error())
+	}
+	finalExe := filepath.Join(baseDir, executableName("xray"))
+	if extracted != finalExe {
+		_ = os.Remove(finalExe)
+		if err := os.Rename(extracted, finalExe); err != nil {
+			if copyErr := copyFile(extracted, finalExe); copyErr != nil {
+				return status.Error(codes.Internal, copyErr.Error())
+			}
+		}
+	}
+	_ = os.Chmod(finalExe, 0o755)
+	if err := s.core.SetExecutablePath(finalExe); err != nil {
+		return status.Error(codes.Internal, err.Error())
+	}
+	return nil
+}
+
+func (s *Server) grpcUpdateGeo(files []downloadFile) error {
+	if len(files) == 0 {
+		return status.Error(codes.InvalidArgument, "'files' must be a non-empty list of {name,url}")
+	}
+	assetsDir := filepath.Join(s.settings.RebeccaDataDir, "assets")
+	if err := os.MkdirAll(assetsDir, 0o755); err != nil {
+		return status.Error(codes.Internal, err.Error())
+	}
+	for _, file := range files {
+		name := safeGeoFilename(file.Name)
+		url := strings.TrimSpace(file.URL)
+		if name == "" || url == "" {
+			return status.Error(codes.InvalidArgument, "each file must include non-empty name and url")
+		}
+		if err := validatePublicHTTPURL(url); err != nil {
+			return status.Error(codes.InvalidArgument, err.Error())
+		}
+		body, err := download(url, 120*time.Second)
+		if err != nil {
+			return status.Error(codes.Unavailable, "failed to download "+name+": "+err.Error())
+		}
+		if err := os.WriteFile(filepath.Join(assetsDir, name), body, 0o644); err != nil {
+			return status.Error(codes.Internal, "failed to save "+name+": "+err.Error())
+		}
+	}
+	s.core.SetAssetsPath(assetsDir)
+	return nil
 }
 
 func (s *Server) setLastConfig(cfg *xray.Config) {

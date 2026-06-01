@@ -205,6 +205,10 @@ const (
 	NodeRuntimeService_UpdateUser_FullMethodName     = "/rebecca.node.v1.NodeRuntimeService/UpdateUser"
 	NodeRuntimeService_RemoveUser_FullMethodName     = "/rebecca.node.v1.NodeRuntimeService/RemoveUser"
 	NodeRuntimeService_Metrics_FullMethodName        = "/rebecca.node.v1.NodeRuntimeService/Metrics"
+	NodeRuntimeService_UpdateRuntime_FullMethodName  = "/rebecca.node.v1.NodeRuntimeService/UpdateRuntime"
+	NodeRuntimeService_UpdateGeo_FullMethodName      = "/rebecca.node.v1.NodeRuntimeService/UpdateGeo"
+	NodeRuntimeService_RestartService_FullMethodName = "/rebecca.node.v1.NodeRuntimeService/RestartService"
+	NodeRuntimeService_UpdateService_FullMethodName  = "/rebecca.node.v1.NodeRuntimeService/UpdateService"
 )
 
 // NodeRuntimeServiceClient is the client API for NodeRuntimeService service.
@@ -219,6 +223,10 @@ type NodeRuntimeServiceClient interface {
 	UpdateUser(ctx context.Context, in *InboundUserRequest, opts ...grpc.CallOption) (*RuntimeActionResponse, error)
 	RemoveUser(ctx context.Context, in *RemoveInboundUserRequest, opts ...grpc.CallOption) (*RuntimeActionResponse, error)
 	Metrics(ctx context.Context, in *MetricsRequest, opts ...grpc.CallOption) (*MetricsResponse, error)
+	UpdateRuntime(ctx context.Context, in *RuntimeUpdateRequest, opts ...grpc.CallOption) (*RuntimeActionResponse, error)
+	UpdateGeo(ctx context.Context, in *GeoUpdateRequest, opts ...grpc.CallOption) (*RuntimeActionResponse, error)
+	RestartService(ctx context.Context, in *ServiceRestartRequest, opts ...grpc.CallOption) (*RuntimeActionResponse, error)
+	UpdateService(ctx context.Context, in *ServiceUpdateRequest, opts ...grpc.CallOption) (*RuntimeActionResponse, error)
 }
 
 type nodeRuntimeServiceClient struct {
@@ -309,6 +317,46 @@ func (c *nodeRuntimeServiceClient) Metrics(ctx context.Context, in *MetricsReque
 	return out, nil
 }
 
+func (c *nodeRuntimeServiceClient) UpdateRuntime(ctx context.Context, in *RuntimeUpdateRequest, opts ...grpc.CallOption) (*RuntimeActionResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RuntimeActionResponse)
+	err := c.cc.Invoke(ctx, NodeRuntimeService_UpdateRuntime_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *nodeRuntimeServiceClient) UpdateGeo(ctx context.Context, in *GeoUpdateRequest, opts ...grpc.CallOption) (*RuntimeActionResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RuntimeActionResponse)
+	err := c.cc.Invoke(ctx, NodeRuntimeService_UpdateGeo_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *nodeRuntimeServiceClient) RestartService(ctx context.Context, in *ServiceRestartRequest, opts ...grpc.CallOption) (*RuntimeActionResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RuntimeActionResponse)
+	err := c.cc.Invoke(ctx, NodeRuntimeService_RestartService_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *nodeRuntimeServiceClient) UpdateService(ctx context.Context, in *ServiceUpdateRequest, opts ...grpc.CallOption) (*RuntimeActionResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RuntimeActionResponse)
+	err := c.cc.Invoke(ctx, NodeRuntimeService_UpdateService_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // NodeRuntimeServiceServer is the server API for NodeRuntimeService service.
 // All implementations must embed UnimplementedNodeRuntimeServiceServer
 // for forward compatibility.
@@ -321,6 +369,10 @@ type NodeRuntimeServiceServer interface {
 	UpdateUser(context.Context, *InboundUserRequest) (*RuntimeActionResponse, error)
 	RemoveUser(context.Context, *RemoveInboundUserRequest) (*RuntimeActionResponse, error)
 	Metrics(context.Context, *MetricsRequest) (*MetricsResponse, error)
+	UpdateRuntime(context.Context, *RuntimeUpdateRequest) (*RuntimeActionResponse, error)
+	UpdateGeo(context.Context, *GeoUpdateRequest) (*RuntimeActionResponse, error)
+	RestartService(context.Context, *ServiceRestartRequest) (*RuntimeActionResponse, error)
+	UpdateService(context.Context, *ServiceUpdateRequest) (*RuntimeActionResponse, error)
 	mustEmbedUnimplementedNodeRuntimeServiceServer()
 }
 
@@ -354,6 +406,18 @@ func (UnimplementedNodeRuntimeServiceServer) RemoveUser(context.Context, *Remove
 }
 func (UnimplementedNodeRuntimeServiceServer) Metrics(context.Context, *MetricsRequest) (*MetricsResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Metrics not implemented")
+}
+func (UnimplementedNodeRuntimeServiceServer) UpdateRuntime(context.Context, *RuntimeUpdateRequest) (*RuntimeActionResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method UpdateRuntime not implemented")
+}
+func (UnimplementedNodeRuntimeServiceServer) UpdateGeo(context.Context, *GeoUpdateRequest) (*RuntimeActionResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method UpdateGeo not implemented")
+}
+func (UnimplementedNodeRuntimeServiceServer) RestartService(context.Context, *ServiceRestartRequest) (*RuntimeActionResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method RestartService not implemented")
+}
+func (UnimplementedNodeRuntimeServiceServer) UpdateService(context.Context, *ServiceUpdateRequest) (*RuntimeActionResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method UpdateService not implemented")
 }
 func (UnimplementedNodeRuntimeServiceServer) mustEmbedUnimplementedNodeRuntimeServiceServer() {}
 func (UnimplementedNodeRuntimeServiceServer) testEmbeddedByValue()                            {}
@@ -520,6 +584,78 @@ func _NodeRuntimeService_Metrics_Handler(srv interface{}, ctx context.Context, d
 	return interceptor(ctx, in, info, handler)
 }
 
+func _NodeRuntimeService_UpdateRuntime_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RuntimeUpdateRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(NodeRuntimeServiceServer).UpdateRuntime(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: NodeRuntimeService_UpdateRuntime_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(NodeRuntimeServiceServer).UpdateRuntime(ctx, req.(*RuntimeUpdateRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _NodeRuntimeService_UpdateGeo_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GeoUpdateRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(NodeRuntimeServiceServer).UpdateGeo(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: NodeRuntimeService_UpdateGeo_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(NodeRuntimeServiceServer).UpdateGeo(ctx, req.(*GeoUpdateRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _NodeRuntimeService_RestartService_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ServiceRestartRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(NodeRuntimeServiceServer).RestartService(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: NodeRuntimeService_RestartService_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(NodeRuntimeServiceServer).RestartService(ctx, req.(*ServiceRestartRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _NodeRuntimeService_UpdateService_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ServiceUpdateRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(NodeRuntimeServiceServer).UpdateService(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: NodeRuntimeService_UpdateService_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(NodeRuntimeServiceServer).UpdateService(ctx, req.(*ServiceUpdateRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // NodeRuntimeService_ServiceDesc is the grpc.ServiceDesc for NodeRuntimeService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -558,6 +694,22 @@ var NodeRuntimeService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Metrics",
 			Handler:    _NodeRuntimeService_Metrics_Handler,
+		},
+		{
+			MethodName: "UpdateRuntime",
+			Handler:    _NodeRuntimeService_UpdateRuntime_Handler,
+		},
+		{
+			MethodName: "UpdateGeo",
+			Handler:    _NodeRuntimeService_UpdateGeo_Handler,
+		},
+		{
+			MethodName: "RestartService",
+			Handler:    _NodeRuntimeService_RestartService_Handler,
+		},
+		{
+			MethodName: "UpdateService",
+			Handler:    _NodeRuntimeService_UpdateService_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

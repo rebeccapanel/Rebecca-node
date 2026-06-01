@@ -19,6 +19,10 @@ service NodeRuntimeService {
   rpc UpdateUser(InboundUserRequest) returns (RuntimeActionResponse);
   rpc RemoveUser(RemoveInboundUserRequest) returns (RuntimeActionResponse);
   rpc Metrics(MetricsRequest) returns (MetricsResponse);
+  rpc UpdateRuntime(RuntimeUpdateRequest) returns (RuntimeActionResponse);
+  rpc UpdateGeo(GeoUpdateRequest) returns (RuntimeActionResponse);
+  rpc RestartService(ServiceRestartRequest) returns (RuntimeActionResponse);
+  rpc UpdateService(ServiceUpdateRequest) returns (RuntimeActionResponse);
 }
 
 service NodeUsageService {
@@ -123,6 +127,31 @@ message MetricsResponse {
   SystemMetrics system = 2;
   TransferMetrics transfer = 3;
   int64 sampled_at_unix = 4;
+}
+
+message RuntimeUpdateRequest {
+  string operation_id = 1;
+  string version = 2;
+}
+
+message GeoUpdateRequest {
+  string operation_id = 1;
+  repeated GeoFile files = 2;
+}
+
+message GeoFile {
+  string name = 1;
+  string url = 2;
+}
+
+message ServiceRestartRequest {
+  string operation_id = 1;
+}
+
+message ServiceUpdateRequest {
+  string operation_id = 1;
+  string channel = 2;
+  string version = 3;
 }
 
 message SystemMetrics {
