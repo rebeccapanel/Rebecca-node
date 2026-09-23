@@ -57,6 +57,23 @@ func TestResolveXrayAssetsPathPrefersUpdatedAssetsOverCoreCache(t *testing.T) {
 	}
 }
 
+func TestResolveXrayAssetsPathKeepsDownloadedGeoAssetsAfterRestart(t *testing.T) {
+	dataDir := t.TempDir()
+	persistentDir := filepath.Join(dataDir, "xray-core")
+	customDir := filepath.Join(dataDir, "assets")
+	if err := ensureTestFile(filepath.Join(persistentDir, "geoip.dat")); err != nil {
+		t.Fatal(err)
+	}
+	if err := ensureTestFile(filepath.Join(customDir, "geosite.dat")); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("XRAY_ASSETS_PATH", persistentDir)
+
+	if got := resolveXrayAssetsPath(dataDir); got != customDir {
+		t.Fatalf("expected downloaded assets dir %q after restart, got %q", customDir, got)
+	}
+}
+
 func TestResolveXrayAssetsPathFallsBackToConfiguredEnv(t *testing.T) {
 	dataDir := t.TempDir()
 	t.Setenv("XRAY_ASSETS_PATH", "/opt/custom/assets")

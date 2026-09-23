@@ -132,6 +132,12 @@ func (c *Config) applyStatsPolicy() {
 	level0["statsUserOnline"] = true
 
 	system := ensureConfigMap(policy, "system")
+	if _, ok := system["statsInboundUplink"]; !ok {
+		system["statsInboundUplink"] = true
+	}
+	if _, ok := system["statsInboundDownlink"]; !ok {
+		system["statsInboundDownlink"] = true
+	}
 	system["statsOutboundDownlink"] = true
 	system["statsOutboundUplink"] = true
 

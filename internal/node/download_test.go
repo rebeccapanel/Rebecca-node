@@ -68,6 +68,19 @@ func TestDownloadXrayCoreArchiveReportsSanitizedHTML(t *testing.T) {
 	}
 }
 
+func TestDownloadRejectsTruncatedResponse(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Length", "10")
+		_, _ = w.Write([]byte("short"))
+	}))
+	defer server.Close()
+
+	_, err := download(server.URL, time.Second)
+	if err == nil {
+		t.Fatalf("expected truncated response error, got %v", err)
+	}
+}
+
 func testZipArchive(t *testing.T) []byte {
 	t.Helper()
 	var buf bytes.Buffer

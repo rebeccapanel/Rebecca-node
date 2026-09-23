@@ -44,6 +44,9 @@ func applyTorProxy(config torProxyConfig) error {
 	if country != "" && !torCountryCodePattern.MatchString(country) {
 		return fmt.Errorf("Tor exit country must be a two-letter ISO code")
 	}
+	if torProxyAlreadyConfigured(config.SocksPort, country, config.StrictExit) {
+		return nil
+	}
 	if err := ensureTorInstalled(); err != nil {
 		return err
 	}
@@ -56,6 +59,29 @@ func applyTorProxy(config torProxyConfig) error {
 		return applyTorSystemdProxy(config.SocksPort, country, config.StrictExit)
 	}
 	return applyLegacyTorProxy(config.SocksPort, country, config.StrictExit)
+}
+
+func torProxyAlreadyConfigured(port uint32, country string, strict bool) bool {
+	if runtime.GOOS != "linux" {
+		return false
+	}
+	unitName := fmt.Sprintf("rebecca-tor-%d.service", port)
+	if !fileExists(filepath.Join("/etc/systemd/system", unitName)) {
+		return false
+	}
+	path := filepath.Join("/etc/tor/rebecca", fmt.Sprintf("rebecca-tor-%d.torrc", port))
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	text := string(raw)
+	if !strings.Contains(text, fmt.Sprintf("SocksPort 127.0.0.1:%d", port)) {
+		return false
+	}
+	if country != "" && !strings.Contains(text, "ExitNodes {"+country+"}") {
+		return false
+	}
+	return strict == strings.Contains(text, "StrictNodes 1")
 }
 
 func applyLegacyTorProxy(port uint32, country string, strict bool) error {

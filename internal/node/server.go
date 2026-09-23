@@ -3,6 +3,7 @@ package node
 import (
 	"archive/zip"
 	"bytes"
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -105,7 +106,9 @@ func New(settings appconfig.Settings) (*Server, error) {
 	if err := server.wg.Apply(&wgRuntime{Inbounds: []wgRuntimeInbound{}}); err != nil {
 		log.Printf("failed to clear cached WireGuard runtime on startup: %v", err)
 	}
-	server.startCachedConfig()
+	if err := server.startCachedConfig(false); err != nil {
+		log.Printf("failed to start cached runtime: %v", err)
+	}
 	return server, nil
 }
 
@@ -548,20 +551,39 @@ func (s *Server) clearConfigCache() {
 	}
 }
 
-func (s *Server) startCachedConfig() {
+func (s *Server) startCachedConfig(restart bool) error {
 	payload, ok := s.loadConfigCache()
 	if !ok {
-		return
+		s.clearCachedAuxiliaryRuntimes()
+		if restart {
+			return errors.New("runtime config cache is unavailable; sync config first")
+		}
+		return nil
+	}
+	if err := s.reconcileManagedProxyServices(context.Background(), payload.Config); err != nil {
+		log.Printf("managed proxy reconciliation failed: %v", err)
+		return err
 	}
 	cfg, err := xray.NewConfig(payload.Config, payload.PeerIP, s.settings)
 	if err != nil {
 		log.Printf("failed to decode cached config: %v", err)
-		return
+		if warning := s.applyHAProxyRuntime(payload.HAProxyRuntime); warning != "" {
+			log.Print(warning)
+		}
+		return err
 	}
 	prepareTProxyConfig(cfg)
-	if err := s.core.Start(cfg); err != nil {
+	if restart {
+		err = s.core.Restart(cfg)
+	} else {
+		err = s.core.Start(cfg)
+	}
+	if err != nil {
 		log.Printf("failed to start cached config: %v", err)
-		return
+		if warning := s.applyHAProxyRuntime(payload.HAProxyRuntime); warning != "" {
+			log.Print(warning)
+		}
+		return err
 	}
 	s.mu.Lock()
 	s.lastConfig = cfg
@@ -577,6 +599,56 @@ func (s *Server) startCachedConfig() {
 	s.applyAnyConnectRuntime(payload.AnyConnectRuntime)
 	s.applyHAProxyRuntime(payload.HAProxyRuntime)
 	s.applyExtraRuntime(payload.ExtraRuntime)
+	return nil
+}
+
+// clearCachedAuxiliaryRuntimes prevents a missing/removed cache from leaving
+// native protocol daemons alive after Rebecca-node restarts.
+func (s *Server) clearCachedAuxiliaryRuntimes() {
+	if err := s.reconcileManagedProxyServices(context.Background(), "{}"); err != nil {
+		log.Printf("managed proxy startup cleanup failed: %v", err)
+	}
+	if err := s.ov.Apply(&ovRuntime{Inbounds: []ovRuntimeInbound{}}); err != nil {
+		log.Printf("OpenVPN startup cleanup failed: %v", err)
+	}
+	if err := s.l2tp.Apply(&l2tpRuntime{Inbounds: []l2tpRuntimeInbound{}}); err != nil {
+		log.Printf("L2TP startup cleanup failed: %v", err)
+	}
+	if err := s.pptp.Apply(&pptpRuntime{Inbounds: []pptpRuntimeInbound{}}); err != nil {
+		log.Printf("PPTP startup cleanup failed: %v", err)
+	}
+	if err := s.wg.Apply(&wgRuntime{Inbounds: []wgRuntimeInbound{}}); err != nil {
+		log.Printf("WireGuard startup cleanup failed: %v", err)
+	}
+	if err := s.remoteAccess.ApplyIKEv2(&remoteAccessRuntime{Inbounds: []remoteAccessRuntimeInbound{}}); err != nil {
+		log.Printf("IKEv2 startup cleanup failed: %v", err)
+	}
+	if err := s.remoteAccess.ApplyAnyConnect(&remoteAccessRuntime{Inbounds: []remoteAccessRuntimeInbound{}}); err != nil {
+		log.Printf("AnyConnect startup cleanup failed: %v", err)
+	}
+	if s.haproxy != nil {
+		if err := s.haproxy.Apply(&haproxyRuntime{}); err != nil {
+			log.Printf("HAProxy startup cleanup failed: %v", err)
+		}
+	}
+	if s.sshProxy != nil {
+		if err := s.sshProxy.Apply(&extraRuntime{}); err != nil {
+			log.Printf("SSH startup cleanup failed: %v", err)
+		}
+	}
+	if s.external != nil {
+		if err := s.external.Apply(&extraRuntime{}); err != nil {
+			log.Printf("external proxy startup cleanup failed: %v", err)
+		}
+	}
+	if s.extraVPN != nil {
+		if err := s.extraVPN.Apply(&extraRuntime{}); err != nil {
+			log.Printf("extra VPN startup cleanup failed: %v", err)
+		}
+	}
+	if err := s.ipBlocks.Clear(context.Background()); err != nil {
+		log.Printf("source IP startup cleanup failed: %v", err)
+	}
 }
 
 type downloadFile struct {
@@ -677,7 +749,7 @@ func nodeUpdateArgs(channel string, version string) ([]string, error) {
 			return append(args, "--dev"), nil
 		default:
 			if strings.HasPrefix(strings.ToLower(normalizedVersion), "dev-") {
-				return append(args, "--dev"), nil
+				return append(args, "--version", normalizedVersion), nil
 			}
 			if !releaseVersionPattern.MatchString(normalizedVersion) {
 				return nil, errors.New("invalid update version")
@@ -716,7 +788,15 @@ func detectXrayAsset() (string, error) {
 }
 
 func validXrayVersion(version string) bool {
-	return xrayVersionPattern.MatchString(strings.TrimSpace(version))
+	return xrayVersionPattern.MatchString(normalizeXrayVersion(version))
+}
+
+func normalizeXrayVersion(version string) string {
+	version = strings.TrimSpace(version)
+	if version != "" && !strings.HasPrefix(strings.ToLower(version), "v") {
+		return "v" + version
+	}
+	return version
 }
 
 func safeGeoFilename(name string) string {
@@ -854,7 +934,14 @@ func download(url string, timeout time.Duration) ([]byte, error) {
 		body, _ := io.ReadAll(io.LimitReader(res.Body, 2048))
 		return nil, fmt.Errorf("http status %d: %s", res.StatusCode, summarizeDownloadBody(body))
 	}
-	return io.ReadAll(res.Body)
+	body, err := io.ReadAll(res.Body)
+	if err != nil {
+		return nil, err
+	}
+	if res.ContentLength >= 0 && int64(len(body)) != res.ContentLength {
+		return nil, fmt.Errorf("incomplete download: received %d of %d bytes", len(body), res.ContentLength)
+	}
+	return body, nil
 }
 
 func downloadXrayCoreArchive(version string, asset string, timeout time.Duration) ([]byte, error) {

@@ -35,11 +35,11 @@ func TestNewConfigForcesStatsPolicy(t *testing.T) {
 	if system["statsOutboundUplink"] != true || system["statsOutboundDownlink"] != true {
 		t.Fatalf("outbound stats were not enabled: %#v", system)
 	}
-	if _, exists := system["statsInboundUplink"]; exists {
-		t.Fatalf("missing inbound uplink toggle should keep Xray's false default: %#v", system)
+	if system["statsInboundUplink"] != true {
+		t.Fatalf("missing inbound uplink toggle should enable inbound statistics: %#v", system)
 	}
-	if _, exists := system["statsInboundDownlink"]; exists {
-		t.Fatalf("missing inbound downlink toggle should keep Xray's false default: %#v", system)
+	if system["statsInboundDownlink"] != true {
+		t.Fatalf("missing inbound downlink toggle should enable inbound statistics: %#v", system)
 	}
 
 	levels := policy["levels"].(map[string]any)

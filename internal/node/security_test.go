@@ -61,7 +61,7 @@ func TestNodeUpdateArgsSupportsReleaseAndDevChannels(t *testing.T) {
 		{name: "dev channel", channel: "dev", want: []string{"update", "--dev"}},
 		{name: "specific version", version: "v1.2.3", want: []string{"update", "--version", "v1.2.3"}},
 		{name: "latest version", version: "latest", want: []string{"update", "--version", "latest"}},
-		{name: "dev version tag", version: "dev-abcdef0", want: []string{"update", "--dev"}},
+		{name: "dev version tag", version: "dev-abcdef0", want: []string{"update", "--version", "dev-abcdef0"}},
 	}
 
 	for _, tt := range tests {
@@ -85,5 +85,16 @@ func TestNodeUpdateArgsSupportsReleaseAndDevChannels(t *testing.T) {
 func TestNodeUpdateArgsRejectsInvalidChannel(t *testing.T) {
 	if _, err := nodeUpdateArgs("nightly; rm -rf /", ""); err == nil {
 		t.Fatal("expected invalid channel to be rejected")
+	}
+}
+
+func TestValidXrayVersionAcceptsVersionsWithoutPrefix(t *testing.T) {
+	for _, version := range []string{"26.9.9", "v26.9.9", "26.9.9-beta.1"} {
+		if !validXrayVersion(version) {
+			t.Fatalf("version %q should be accepted", version)
+		}
+	}
+	if validXrayVersion("latest") || validXrayVersion("26") {
+		t.Fatal("invalid Xray versions were accepted")
 	}
 }

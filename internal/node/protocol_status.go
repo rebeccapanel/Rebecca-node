@@ -108,7 +108,9 @@ func (s *Server) protocolStatuses() []*nodev1.ProtocolStatus {
 	}
 
 	haproxyConfigured, haproxyRunning := 0, 0
+	haproxyError := ""
 	if s.haproxy != nil {
+		haproxyError = s.haproxy.lastErrorMessage()
 		if configured := s.cachedHAProxyRuntime(); configured != nil {
 			if configured.Enabled {
 				haproxyConfigured = 1
@@ -118,7 +120,14 @@ func (s *Server) protocolStatuses() []*nodev1.ProtocolStatus {
 			}
 		}
 	}
-	statuses = append(statuses, protocolState("haproxy", haproxyConfigured, haproxyRunning, ""))
+	haproxyStatus := protocolState("haproxy", haproxyConfigured, haproxyRunning, "")
+	if haproxyError != "" {
+		if haproxyStatus.Detail != "" {
+			haproxyStatus.Detail += "; "
+		}
+		haproxyStatus.Detail += "last error: " + haproxyError
+	}
+	statuses = append(statuses, haproxyStatus)
 	sshConfigured, sshRunning := 0, 0
 	if s.sshProxy != nil {
 		sshConfigured, sshRunning = s.sshProxy.State()

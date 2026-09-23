@@ -221,6 +221,9 @@ func (api *grpcAPI) SyncConfig(ctx context.Context, req *nodev1.RuntimeConfigReq
 	if err := api.server.validateDesiredRevision(req); err != nil {
 		return nil, err
 	}
+	if err := api.server.reconcileManagedProxyServices(ctx, req.GetConfigJson()); err != nil {
+		return nil, status.Error(codes.FailedPrecondition, err.Error())
+	}
 	var response *nodev1.RuntimeActionResponse
 	var err error
 	if api.server.core.Started() {
@@ -1052,7 +1055,7 @@ func (s *Server) grpcAddUser(req *nodev1.InboundUserRequest, message string) (*n
 }
 
 func (s *Server) grpcUpdateRuntime(version string) error {
-	version = strings.TrimSpace(version)
+	version = normalizeXrayVersion(version)
 	if version == "" {
 		return status.Error(codes.InvalidArgument, "version is required")
 	}
@@ -1071,13 +1074,22 @@ func (s *Server) grpcUpdateRuntime(version string) error {
 	if err := os.MkdirAll(baseDir, 0o755); err != nil {
 		return status.Error(codes.Internal, err.Error())
 	}
-	wasRunning := s.core.Started()
-	if wasRunning {
+	wasStarted := s.core.Started()
+	if wasStarted {
 		s.snapshotRunningUsage()
 		s.core.Stop()
 	}
+	restore := func() {
+		if !wasStarted {
+			return
+		}
+		if restoreErr := s.startCachedConfig(false); restoreErr != nil {
+			log.Printf("failed to restore Xray after core update error: %v", restoreErr)
+		}
+	}
 	extracted, err := installZipTo(body, baseDir)
 	if err != nil {
+		restore()
 		return status.Error(codes.Internal, err.Error())
 	}
 	finalExe := filepath.Join(baseDir, executableName("xray"))
@@ -1085,23 +1097,19 @@ func (s *Server) grpcUpdateRuntime(version string) error {
 		_ = os.Remove(finalExe)
 		if err := os.Rename(extracted, finalExe); err != nil {
 			if copyErr := copyFile(extracted, finalExe); copyErr != nil {
+				restore()
 				return status.Error(codes.Internal, copyErr.Error())
 			}
 		}
 	}
 	_ = os.Chmod(finalExe, 0o755)
 	if err := s.core.SetExecutablePath(finalExe); err != nil {
+		restore()
 		return status.Error(codes.Internal, err.Error())
 	}
-	if wasRunning {
-		s.mu.Lock()
-		cachedConfig := s.lastConfig
-		s.mu.Unlock()
-		if cachedConfig == nil {
-			return status.Error(codes.FailedPrecondition, "Xray was running without a cached configuration")
-		}
-		if err := s.core.Start(cachedConfig); err != nil {
-			return status.Error(codes.Unavailable, "failed to restart Xray after core update: "+err.Error())
+	if wasStarted {
+		if err := s.startCachedConfig(false); err != nil {
+			return status.Error(codes.Unavailable, "Xray core updated but runtime restart failed: "+err.Error())
 		}
 	}
 	return nil
@@ -1134,14 +1142,9 @@ func (s *Server) grpcUpdateGeo(files []downloadFile) error {
 	}
 	s.core.SetAssetsPath(assetsDir)
 	if s.core.Started() {
-		s.mu.Lock()
-		cachedConfig := s.lastConfig
-		s.mu.Unlock()
-		if cachedConfig == nil {
-			return status.Error(codes.FailedPrecondition, "Xray is running without a cached configuration")
-		}
-		if err := s.core.Restart(cachedConfig); err != nil {
-			return status.Error(codes.Unavailable, "failed to restart Xray after geo update: "+err.Error())
+		s.snapshotRunningUsage()
+		if err := s.startCachedConfig(true); err != nil {
+			return status.Error(codes.Unavailable, "Geo assets updated but runtime restart failed: "+err.Error())
 		}
 	}
 	return nil
