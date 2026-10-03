@@ -5,9 +5,42 @@ import (
 	"errors"
 	"reflect"
 	"testing"
+	"time"
 
+	appconfig "github.com/rebeccapanel/rebecca-node/internal/config"
 	"github.com/rebeccapanel/rebecca-node/internal/xray"
 )
+
+func TestCacheUserMutationDoesNotBlockControlState(t *testing.T) {
+	s := &Server{settings: appconfig.Settings{RebeccaDataDir: t.TempDir()}, core: &xray.Core{}}
+	s.saveConfigCache(`{"inbounds":[{"tag":"vless","protocol":"vless","settings":{"clients":[]}}],"outbounds":[]}`, "127.0.0.1", nil, nil, nil, nil)
+	user := xray.InboundUser{Email: "1.test", Protocol: "vless", ID: "11111111-1111-4111-8111-111111111111"}
+	for _, mutate := range []func() error{
+		func() error { return s.addUserToConfigCache("vless", user) },
+		func() error { return s.removeUserFromConfigCache("vless", user.Email) },
+	} {
+		done := make(chan error, 1)
+		go func() {
+			err := mutate()
+			if err == nil {
+				s.grpcRuntimeState("healthy")
+			}
+			done <- err
+		}()
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Fatal(err)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("user cache mutation deadlocked node control requests")
+		}
+	}
+	payload, ok := s.loadConfigCache()
+	if !ok || len(cacheTestClients(t, payload.Config)) != 0 {
+		t.Fatal("user cache mutation was not persisted")
+	}
+}
 
 func TestPatchConfigCacheUserJSONAddsAndReplacesUser(t *testing.T) {
 	raw := `{"inbounds":[{"tag":"vless-ws","protocol":"vless","settings":{"clients":[{"email":"1.old","id":"old-id"}]}}]}`

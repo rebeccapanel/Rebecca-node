@@ -104,9 +104,8 @@ func (s *Server) patchConfigCacheUser(inboundTag string, user xray.InboundUser, 
 		return fmt.Errorf("inbound_tag is required")
 	}
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
+	// Public user/runtime operations already hold runtimeMu. Do not hold the
+	// session mutex while saving: diagnostic config updates acquire it too.
 	payload, ok := s.loadConfigCache()
 	if !ok {
 		return nil

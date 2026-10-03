@@ -95,7 +95,7 @@ func TestRestartRuntimeRestartsUnchangedConfig(t *testing.T) {
 	tempDir := t.TempDir()
 	runsPath := filepath.Join(tempDir, "runs")
 	executable := filepath.Join(tempDir, "xray")
-	if err := os.WriteFile(executable, []byte("#!/bin/sh\nif [ \"$1\" = version ]; then echo 'Xray 1.0.0'; exit 0; fi\necho $$ >> \"$XRAY_TEST_RUNS\"\ncat >/dev/null\nwhile :; do sleep 1; done\n"), 0o700); err != nil {
+	if err := os.WriteFile(executable, []byte("#!/bin/sh\nif [ \"$1\" = version ]; then echo 'Xray 1.0.0'; exit 0; fi\nif [ \"$2\" = -test ]; then cat >/dev/null; exit 0; fi\necho $$ >> \"$XRAY_TEST_RUNS\"\ncat >/dev/null\nwhile :; do sleep 1; done\n"), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("XRAY_TEST_RUNS", runsPath)

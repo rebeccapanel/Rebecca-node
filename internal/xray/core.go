@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"os"
 	"os/exec"
@@ -222,8 +223,41 @@ func (c *Core) stop() {
 func (c *Core) Restart(config *Config) error {
 	c.lifecycleMu.Lock()
 	defer c.lifecycleMu.Unlock()
+	// Reject an invalid replacement without stopping the healthy runtime.
+	if err := c.validate(config); err != nil {
+		return err
+	}
 	c.stop()
 	return c.start(config)
+}
+
+func (c *Core) validate(config *Config) error {
+	if err := config.NormalizeLogPaths(); err != nil {
+		return err
+	}
+	if err := ensureLogFiles(config); err != nil {
+		return err
+	}
+	configJSON, err := config.JSON()
+	if err != nil {
+		return err
+	}
+	c.mu.Lock()
+	executable, assets := c.executablePath, c.assetsPath
+	c.mu.Unlock()
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, executable, "run", "-test", "-config", "stdin:")
+	cmd.Env = append(os.Environ(), "XRAY_LOCATION_ASSET="+assets)
+	cmd.Stdin = bytes.NewReader(configJSON)
+	output, err := cmd.CombinedOutput()
+	if ctx.Err() != nil {
+		return fmt.Errorf("Xray replacement validation failed; running runtime preserved: %w", ctx.Err())
+	}
+	if err != nil {
+		return fmt.Errorf("Xray replacement validation failed; running runtime preserved: %w: %s", err, strings.TrimSpace(string(output)))
+	}
+	return nil
 }
 
 func (c *Core) capture(pipe interface{ Read([]byte) (int, error) }) {
