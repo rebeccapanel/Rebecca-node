@@ -47,11 +47,18 @@ type Server struct {
 	system       *systemSampler
 	operations   *operationDeduper
 
-	mu         sync.Mutex
-	connected  bool
-	clientIP   string
-	sessions   map[string]time.Time
-	lastConfig *xray.Config
+	mu               sync.Mutex
+	connected        bool
+	clientIP         string
+	sessions         map[string]time.Time
+	lastConfig       *xray.Config
+	diagnosticConfig proxyDiagnosticConfig
+	startupError     string
+	nativeErrors     map[string]string
+	runtimeStopped   bool
+	diagnosticsMu    sync.Mutex
+	diagnosticsAt    time.Time
+	diagnostics      []*nodev1.ProtocolStatus
 
 	// runtimeMu serializes whole runtime operations (start/restart/stop/sync and
 	// user add/update/remove) so two concurrent pushes from the master can never
@@ -246,6 +253,7 @@ func (s *Server) saveConfigCacheWithHAProxy(rawConfig string, peerIP string, run
 	if strings.TrimSpace(rawConfig) == "" {
 		return
 	}
+	s.setDiagnosticConfig(rawConfig)
 	var ikev2Runtime, anyConnectRuntime *remoteAccessRuntime
 	if len(remoteRuntimes) > 0 {
 		ikev2Runtime = remoteRuntimes[0]
@@ -417,7 +425,8 @@ func (s *Server) cachedExtraRuntime() *extraRuntime {
 	return payload.ExtraRuntime
 }
 
-func (s *Server) applyL2TPRuntime(runtimeConfig *l2tpRuntime) string {
+func (s *Server) applyL2TPRuntime(runtimeConfig *l2tpRuntime) (result string) {
+	defer func() { s.recordNativeIssue("l2tp", result) }()
 	if err := s.l2tp.Apply(runtimeConfig); err != nil {
 		warning := "L2TP runtime apply failed: " + err.Error()
 		log.Print(warning)
@@ -426,7 +435,18 @@ func (s *Server) applyL2TPRuntime(runtimeConfig *l2tpRuntime) string {
 	return ""
 }
 
-func (s *Server) applyPPTPRuntime(runtimeConfig *pptpRuntime) string {
+func (s *Server) applyOpenVPNRuntime(runtimeConfig *ovRuntime) error {
+	err := s.ov.Apply(runtimeConfig)
+	message := ""
+	if err != nil {
+		message = "OpenVPN runtime apply failed: " + err.Error()
+	}
+	s.recordNativeIssue("openvpn", message)
+	return err
+}
+
+func (s *Server) applyPPTPRuntime(runtimeConfig *pptpRuntime) (result string) {
+	defer func() { s.recordNativeIssue("pptp", result) }()
 	if err := s.pptp.Apply(runtimeConfig); err != nil {
 		warning := "PPTP runtime apply failed: " + err.Error()
 		log.Print(warning)
@@ -435,7 +455,8 @@ func (s *Server) applyPPTPRuntime(runtimeConfig *pptpRuntime) string {
 	return ""
 }
 
-func (s *Server) applyWGRuntime(runtimeConfig *wgRuntime) string {
+func (s *Server) applyWGRuntime(runtimeConfig *wgRuntime) (result string) {
+	defer func() { s.recordNativeIssue("wireguard", result) }()
 	if err := s.wg.Apply(runtimeConfig); err != nil {
 		warning := "WireGuard runtime apply failed: " + err.Error()
 		log.Print(warning)
@@ -444,7 +465,8 @@ func (s *Server) applyWGRuntime(runtimeConfig *wgRuntime) string {
 	return ""
 }
 
-func (s *Server) applyIKEv2Runtime(runtimeConfig *remoteAccessRuntime) string {
+func (s *Server) applyIKEv2Runtime(runtimeConfig *remoteAccessRuntime) (result string) {
+	defer func() { s.recordNativeIssue("ikev2", result) }()
 	if err := s.remoteAccess.ApplyIKEv2(runtimeConfig); err != nil {
 		warning := "IKEv2 runtime apply failed: " + err.Error()
 		log.Print(warning)
@@ -453,7 +475,8 @@ func (s *Server) applyIKEv2Runtime(runtimeConfig *remoteAccessRuntime) string {
 	return ""
 }
 
-func (s *Server) prepareIKEv2Runtime(runtimeConfig *remoteAccessRuntime) string {
+func (s *Server) prepareIKEv2Runtime(runtimeConfig *remoteAccessRuntime) (result string) {
+	defer func() { s.recordNativeIssue("ikev2-prerequisites", result) }()
 	if runtimeConfig == nil || len(runtimeConfig.Inbounds) == 0 {
 		return ""
 	}
@@ -465,7 +488,8 @@ func (s *Server) prepareIKEv2Runtime(runtimeConfig *remoteAccessRuntime) string 
 	return ""
 }
 
-func (s *Server) applyAnyConnectRuntime(runtimeConfig *remoteAccessRuntime) string {
+func (s *Server) applyAnyConnectRuntime(runtimeConfig *remoteAccessRuntime) (result string) {
+	defer func() { s.recordNativeIssue("anyconnect", result) }()
 	if err := s.remoteAccess.ApplyAnyConnect(runtimeConfig); err != nil {
 		warning := "AnyConnect runtime apply failed: " + err.Error()
 		log.Print(warning)
@@ -474,7 +498,8 @@ func (s *Server) applyAnyConnectRuntime(runtimeConfig *remoteAccessRuntime) stri
 	return ""
 }
 
-func (s *Server) applyHAProxyRuntime(runtimeConfig *haproxyRuntime) string {
+func (s *Server) applyHAProxyRuntime(runtimeConfig *haproxyRuntime) (result string) {
+	defer func() { s.recordNativeIssue("haproxy", result) }()
 	if s.haproxy == nil {
 		if runtimeConfig == nil || !runtimeConfig.Enabled {
 			return ""
@@ -489,7 +514,8 @@ func (s *Server) applyHAProxyRuntime(runtimeConfig *haproxyRuntime) string {
 	return ""
 }
 
-func (s *Server) applyExtraRuntime(runtimeConfig *extraRuntime) string {
+func (s *Server) applyExtraRuntime(runtimeConfig *extraRuntime) (result string) {
+	defer func() { s.recordNativeIssue("extra-protocols", result) }()
 	warnings := []string{}
 	hasSSH, hasExternal, hasExtraVPN := false, false, false
 	if runtimeConfig != nil {
@@ -546,20 +572,41 @@ func joinedWarnings(values ...string) string {
 }
 
 func (s *Server) clearConfigCache() {
+	s.mu.Lock()
+	s.runtimeStopped = true
+	s.nativeErrors = nil
+	s.startupError = ""
+	s.diagnosticConfig = proxyDiagnosticConfig{}
+	s.mu.Unlock()
+	s.diagnosticsMu.Lock()
+	s.diagnosticsAt = time.Time{}
+	s.diagnosticsMu.Unlock()
 	if err := os.Remove(s.configCachePath()); err != nil && !errors.Is(err, os.ErrNotExist) {
 		log.Printf("failed to clear config cache: %v", err)
 	}
 }
 
-func (s *Server) startCachedConfig(restart bool) error {
+func (s *Server) startCachedConfig(restart bool) (resultErr error) {
+	defer func() {
+		s.mu.Lock()
+		s.startupError = ""
+		if resultErr != nil {
+			s.startupError = resultErr.Error()
+		}
+		s.mu.Unlock()
+	}()
 	payload, ok := s.loadConfigCache()
 	if !ok {
+		if _, err := os.Stat(s.configCachePath()); !os.IsNotExist(err) {
+			return fmt.Errorf("cached runtime configuration is unreadable or invalid; sync a valid configuration from the master")
+		}
 		s.clearCachedAuxiliaryRuntimes()
 		if restart {
 			return errors.New("runtime config cache is unavailable; sync config first")
 		}
 		return nil
 	}
+	s.setDiagnosticConfig(payload.Config)
 	if err := s.reconcileManagedProxyServices(context.Background(), payload.Config); err != nil {
 		log.Printf("managed proxy reconciliation failed: %v", err)
 		return err
@@ -588,7 +635,7 @@ func (s *Server) startCachedConfig(restart bool) error {
 	s.mu.Lock()
 	s.lastConfig = cfg
 	s.mu.Unlock()
-	if err := s.ov.Apply(payload.OVRuntime); err != nil {
+	if err := s.applyOpenVPNRuntime(payload.OVRuntime); err != nil {
 		log.Printf("OpenVPN cached runtime apply failed: %v", err)
 	}
 	s.prepareIKEv2Runtime(payload.IKEv2Runtime)

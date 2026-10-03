@@ -1,9 +1,12 @@
 package node
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestProtocolStateAndProcessStatParsing(t *testing.T) {
-	if got := protocolState("openvpn", 2, 1, ""); got.GetState() != "error" || got.GetDetail() != "1/2 running" {
+	if got := protocolState("openvpn", 2, 1, ""); got.GetState() != "error" || !strings.HasPrefix(got.GetDetail(), "1/2 running") || !strings.Contains(got.GetDetail(), "not running") {
 		t.Fatalf("partial protocol state = %#v", got)
 	}
 	if got := protocolState("wireguard", 0, 0, ""); got.GetState() != "idle" {
