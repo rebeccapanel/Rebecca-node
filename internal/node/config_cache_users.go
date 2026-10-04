@@ -13,6 +13,31 @@ func (s *Server) addUserToConfigCache(inboundTag string, user xray.InboundUser) 
 	return s.patchConfigCacheUser(inboundTag, user, "")
 }
 
+func (s *Server) inheritInboundUserFlow(inboundTag string, user xray.InboundUser) (xray.InboundUser, error) {
+	if user.Protocol != "vless" || user.Flow != "" {
+		return user, nil
+	}
+	s.mu.Lock()
+	payload, ok := s.loadConfigCache()
+	s.mu.Unlock()
+	if !ok {
+		return user, nil
+	}
+	var config map[string]any
+	if err := json.Unmarshal([]byte(payload.Config), &config); err != nil {
+		return user, err
+	}
+	for _, value := range anySlice(config["inbounds"]) {
+		inbound, _ := value.(map[string]any)
+		if asString(inbound["tag"]) == inboundTag && asString(inbound["protocol"]) == "vless" {
+			settings, _ := inbound["settings"].(map[string]any)
+			user.Flow = strings.TrimSpace(asString(settings["flow"]))
+			break
+		}
+	}
+	return user, nil
+}
+
 func (s *Server) removeUserFromConfigCache(inboundTag string, email string) error {
 	return s.patchConfigCacheUser(inboundTag, xray.InboundUser{}, email)
 }
@@ -337,6 +362,9 @@ func configClientStates(rawConfig string) (map[string]configClientState, error) 
 			}
 			if user.Email == "" {
 				continue
+			}
+			if protocol == "vless" && user.Flow == "" {
+				user.Flow = strings.TrimSpace(asString(settings["flow"]))
 			}
 			state.clients[user.Email] = user
 			encoded, _ := json.Marshal(client)

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -39,6 +40,43 @@ func TestCacheUserMutationDoesNotBlockControlState(t *testing.T) {
 	payload, ok := s.loadConfigCache()
 	if !ok || len(cacheTestClients(t, payload.Config)) != 0 {
 		t.Fatal("user cache mutation was not persisted")
+	}
+}
+
+func TestLiveAndReconciledUsersInheritVLESSInboundFlow(t *testing.T) {
+	s := &Server{settings: appconfig.Settings{RebeccaDataDir: t.TempDir()}, core: &xray.Core{}}
+	raw := `{"inbounds":[{"tag":"vision","protocol":"vless","settings":{"flow":"xtls-rprx-vision","clients":[{"email":"1.old","id":"11111111-1111-4111-8111-111111111111"}]}},{"tag":"plain","protocol":"vless","settings":{"clients":[]}}],"outbounds":[]}`
+	s.saveConfigCache(raw, "127.0.0.1", nil, nil, nil, nil)
+	for _, tag := range []string{"vision", "plain"} {
+		user, err := s.inheritInboundUserFlow(tag, xray.InboundUser{Protocol: "vless", Email: "2.new", ID: "22222222-2222-4222-8222-222222222222"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := ""
+		if tag == "vision" {
+			want = "xtls-rprx-vision"
+		}
+		if user.Flow != want {
+			t.Fatalf("%s live user flow=%q, want %q", tag, user.Flow, want)
+		}
+	}
+	states, err := configClientStates(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if states["vision"].clients["1.old"].Flow != "xtls-rprx-vision" {
+		t.Fatal("reconciliation did not inherit effective account flow")
+	}
+	// Old live-added accounts can lack Flow even when the cached JSON has a
+	// default. A full sync with explicit Flow must repair them, not skip them.
+	explicit := strings.Replace(raw, `"email":"1.old"`, `"flow":"xtls-rprx-vision","email":"1.old"`, 1)
+	diff, err := configUserDiff(raw, explicit)
+	if err != nil || len(diff.update) != 1 || diff.update[0].current.Flow != "xtls-rprx-vision" {
+		t.Fatalf("legacy account was not scheduled for repair: %+v, %v", diff, err)
+	}
+	user, err := s.inheritInboundUserFlow("vision", xray.InboundUser{Protocol: "vless", Flow: "explicit"})
+	if err != nil || user.Flow != "explicit" {
+		t.Fatal("explicit account override changed")
 	}
 }
 

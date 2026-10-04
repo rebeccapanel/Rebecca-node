@@ -277,6 +277,10 @@ func (api *grpcAPI) UpdateUser(ctx context.Context, req *nodev1.InboundUserReque
 	if !cacheAvailable {
 		return nil, status.Error(codes.FailedPrecondition, "runtime config cache is unavailable; sync config first")
 	}
+	user, err = api.server.inheritInboundUserFlow(inboundTag, user)
+	if err != nil {
+		return nil, status.Error(codes.Unavailable, err.Error())
+	}
 	diff := configUserDiffResult{}
 	if exists {
 		diff.update = append(diff.update, configUserUpdate{inboundTag: inboundTag, previous: previous, current: user})
@@ -1050,6 +1054,10 @@ func (s *Server) grpcAddUser(req *nodev1.InboundUserRequest, message string) (*n
 	user, err := protoInboundUser(req.GetUser())
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
+	}
+	user, err = s.inheritInboundUserFlow(inboundTag, user)
+	if err != nil {
+		return nil, status.Error(codes.Unavailable, err.Error())
 	}
 	if err := xray.AddInboundUser(
 		s.settings.XrayAPIHost,
