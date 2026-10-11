@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"strings"
 
 	nodev1 "github.com/rebeccapanel/rebecca-node/internal/proto/node/v1"
@@ -28,6 +29,12 @@ func (api *grpcAPI) ApplyUserBatch(ctx context.Context, req *nodev1.UserBatchReq
 	if !api.server.core.Started() {
 		return nil, status.Error(codes.FailedPrecondition, "Xray is not started")
 	}
+	api.server.beginConfigCacheBatch()
+	defer func() {
+		if err := api.server.endConfigCacheBatch(); err != nil {
+			log.Printf("failed to save config cache after user batch: %v", err)
+		}
+	}()
 	for index, operation := range operations {
 		if err := ctx.Err(); err != nil {
 			return nil, status.FromContextError(err).Err()

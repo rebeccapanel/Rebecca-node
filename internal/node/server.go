@@ -31,21 +31,24 @@ import (
 )
 
 type Server struct {
-	settings     appconfig.Settings
-	core         *xray.Core
-	ov           *ovManager
-	l2tp         *l2tpManager
-	pptp         *pptpManager
-	wg           *wgManager
-	remoteAccess *remoteAccessManager
-	haproxy      *haproxyManager
-	sshProxy     *sshProxyManager
-	external     *externalProxyManager
-	extraVPN     *extraVPNManager
-	ipBlocks     *sourceIPBlocker
-	usage        *usageBuffer
-	system       *systemSampler
-	operations   *operationDeduper
+	settings              appconfig.Settings
+	core                  *xray.Core
+	configCacheMu         sync.Mutex
+	configCacheBatch      *cachedConfigPayload
+	configCacheBatchDirty bool
+	ov                    *ovManager
+	l2tp                  *l2tpManager
+	pptp                  *pptpManager
+	wg                    *wgManager
+	remoteAccess          *remoteAccessManager
+	haproxy               *haproxyManager
+	sshProxy              *sshProxyManager
+	external              *externalProxyManager
+	extraVPN              *extraVPNManager
+	ipBlocks              *sourceIPBlocker
+	usage                 *usageBuffer
+	system                *systemSampler
+	operations            *operationDeduper
 
 	mu               sync.Mutex
 	connected        bool
@@ -266,16 +269,8 @@ func (s *Server) saveConfigCacheWithHAProxy(rawConfig string, peerIP string, run
 	if cached, ok := s.loadConfigCache(); ok {
 		appliedRevision = cached.AppliedRevision
 	}
-	payload, err := json.Marshal(cachedConfigPayload{AppliedRevision: appliedRevision, Config: rawConfig, PeerIP: peerIP, OVRuntime: runtimeConfig, L2TPRuntime: l2tpRuntimeConfig, PPTPRuntime: pptpRuntimeConfig, WGRuntime: wgRuntimeConfig, IKEv2Runtime: ikev2Runtime, AnyConnectRuntime: anyConnectRuntime, HAProxyRuntime: haproxyRuntimeConfig, ExtraRuntime: extraRuntimeConfig})
-	if err != nil {
-		return
-	}
-	path := s.configCachePath()
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		log.Printf("failed to create config cache directory: %v", err)
-		return
-	}
-	if err := writeFileAtomic(path, payload, 0o600); err != nil {
+	payload := cachedConfigPayload{AppliedRevision: appliedRevision, Config: rawConfig, PeerIP: peerIP, OVRuntime: runtimeConfig, L2TPRuntime: l2tpRuntimeConfig, PPTPRuntime: pptpRuntimeConfig, WGRuntime: wgRuntimeConfig, IKEv2Runtime: ikev2Runtime, AnyConnectRuntime: anyConnectRuntime, HAProxyRuntime: haproxyRuntimeConfig, ExtraRuntime: extraRuntimeConfig}
+	if err := s.persistConfigCache(payload); err != nil {
 		log.Printf("failed to save config cache: %v", err)
 	}
 }
@@ -297,11 +292,7 @@ func (s *Server) setAppliedRevision(revision uint64) {
 		return
 	}
 	payload.AppliedRevision = revision
-	raw, err := json.Marshal(payload)
-	if err != nil {
-		return
-	}
-	if err := writeFileAtomic(s.configCachePath(), raw, 0o600); err != nil {
+	if err := s.persistConfigCache(payload); err != nil {
 		log.Printf("failed to save applied revision: %v", err)
 	}
 }
@@ -345,6 +336,66 @@ func writeFileAtomic(path string, data []byte, mode os.FileMode) error {
 }
 
 func (s *Server) loadConfigCache() (cachedConfigPayload, bool) {
+	s.configCacheMu.Lock()
+	if s.configCacheBatch != nil {
+		payload := *s.configCacheBatch
+		s.configCacheMu.Unlock()
+		return payload, true
+	}
+	s.configCacheMu.Unlock()
+	return s.readConfigCacheFile()
+}
+
+func (s *Server) beginConfigCacheBatch() {
+	payload, ok := s.readConfigCacheFile()
+	s.configCacheMu.Lock()
+	defer s.configCacheMu.Unlock()
+	if s.configCacheBatch != nil || !ok {
+		return
+	}
+	s.configCacheBatch = &payload
+	s.configCacheBatchDirty = false
+}
+
+func (s *Server) endConfigCacheBatch() error {
+	s.configCacheMu.Lock()
+	batch := s.configCacheBatch
+	dirty := s.configCacheBatchDirty
+	s.configCacheBatch = nil
+	s.configCacheBatchDirty = false
+	s.configCacheMu.Unlock()
+	if batch == nil || !dirty {
+		return nil
+	}
+	return s.writeConfigCacheFile(*batch)
+}
+
+func (s *Server) persistConfigCache(payload cachedConfigPayload) error {
+	s.configCacheMu.Lock()
+	if s.configCacheBatch != nil {
+		batched := payload
+		s.configCacheBatch = &batched
+		s.configCacheBatchDirty = true
+		s.configCacheMu.Unlock()
+		return nil
+	}
+	s.configCacheMu.Unlock()
+	return s.writeConfigCacheFile(payload)
+}
+
+func (s *Server) writeConfigCacheFile(payload cachedConfigPayload) error {
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+	path := s.configCachePath()
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+	return writeFileAtomic(path, raw, 0o600)
+}
+
+func (s *Server) readConfigCacheFile() (cachedConfigPayload, bool) {
 	var payload cachedConfigPayload
 	raw, err := os.ReadFile(s.configCachePath())
 	if err != nil {
