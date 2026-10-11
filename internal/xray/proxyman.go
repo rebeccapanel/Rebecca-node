@@ -2,6 +2,7 @@ package xray
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"strings"
 	"time"
@@ -141,6 +142,13 @@ func buildAccountMessage(user InboundUser) (proto.Message, error) {
 			return nil, fmt.Errorf("password is required for shadowsocks")
 		}
 		if strings.HasPrefix(strings.ToLower(strings.TrimSpace(user.Method)), "2022-") {
+			keyLength := 32
+			if strings.Contains(strings.ToLower(user.Method), "aes-128") {
+				keyLength = 16
+			}
+			if key, err := base64.StdEncoding.DecodeString(password); err != nil || len(key) != keyLength {
+				return nil, fmt.Errorf("shadowsocks 2022 user key must be a base64-encoded %d-byte key", keyLength)
+			}
 			return &shadowsocks2022.Account{Key: password}, nil
 		}
 		return &shadowsocks.Account{

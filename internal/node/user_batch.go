@@ -81,6 +81,7 @@ func (s *Server) upsertBatchUser(inboundTag string, user xray.InboundUser) error
 	if err != nil {
 		return err
 	}
+	user = withShadowsocksInboundMethod(user, s.shadowsocksInboundMethods(), inboundTag)
 	if !cacheAvailable {
 		if err := xray.AddInboundUser(s.settings.XrayAPIHost, s.settings.XrayAPIPort, grpcOperationTimeout, inboundTag, user); err != nil && !isIgnorableXrayAddError(err) {
 			return err

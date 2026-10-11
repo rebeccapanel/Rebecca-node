@@ -1059,6 +1059,7 @@ func (s *Server) grpcAddUser(req *nodev1.InboundUserRequest, message string) (*n
 	if err != nil {
 		return nil, status.Error(codes.Unavailable, err.Error())
 	}
+	user = withShadowsocksInboundMethod(user, s.shadowsocksInboundMethods(), inboundTag)
 	if err := xray.AddInboundUser(
 		s.settings.XrayAPIHost,
 		s.settings.XrayAPIPort,
