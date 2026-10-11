@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -250,7 +251,7 @@ func (c *Core) validate(config *Config) error {
 	if err := ensureLogFiles(config); err != nil {
 		return err
 	}
-	configJSON, err := config.JSON()
+	configJSON, err := validationConfigJSON(config)
 	if err != nil {
 		return err
 	}
@@ -270,6 +271,34 @@ func (c *Core) validate(config *Config) error {
 		return fmt.Errorf("Xray replacement validation failed; running runtime preserved: %w: %s", err, strings.TrimSpace(string(output)))
 	}
 	return nil
+}
+
+func validationConfigJSON(config *Config) ([]byte, error) {
+	raw, err := config.JSON()
+	if err != nil {
+		return nil, err
+	}
+	return forceWireGuardUserspace(raw)
+}
+
+func forceWireGuardUserspace(raw []byte) ([]byte, error) {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	var data map[string]any
+	if err := decoder.Decode(&data); err != nil {
+		return nil, err
+	}
+	outbounds, _ := data["outbounds"].([]any)
+	for _, value := range outbounds {
+		outbound, _ := value.(map[string]any)
+		if !strings.EqualFold(strings.TrimSpace(fmt.Sprint(outbound["protocol"])), "wireguard") {
+			continue
+		}
+		if settings, ok := outbound["settings"].(map[string]any); ok {
+			settings["noKernelTun"] = true
+		}
+	}
+	return json.Marshal(data)
 }
 
 func (c *Core) capture(pipe interface{ Read([]byte) (int, error) }) {
