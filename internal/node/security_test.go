@@ -82,6 +82,14 @@ func TestNodeUpdateArgsSupportsReleaseAndDevChannels(t *testing.T) {
 	}
 }
 
+func TestNodeUpdateArgsRejectsMalformedDevVersion(t *testing.T) {
+	for _, version := range []string{"dev-abc", "dev-../../x", "dev-abcdef0;id", "dev-"} {
+		if _, err := nodeUpdateArgs("", version); err == nil {
+			t.Fatalf("expected dev version %q to be rejected", version)
+		}
+	}
+}
+
 func TestNodeUpdateArgsRejectsInvalidChannel(t *testing.T) {
 	if _, err := nodeUpdateArgs("nightly; rm -rf /", ""); err == nil {
 		t.Fatal("expected invalid channel to be rejected")

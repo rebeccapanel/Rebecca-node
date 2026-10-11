@@ -76,6 +76,7 @@ const sessionTTL = 30 * time.Minute
 
 var xrayVersionPattern = regexp.MustCompile(`^v\d+\.\d+\.\d+(?:[-+._A-Za-z0-9]*)?$`)
 var releaseVersionPattern = regexp.MustCompile(`^v?\d+(?:\.\d+){1,3}(?:[-+._A-Za-z0-9]*)?$`)
+var devVersionPattern = regexp.MustCompile(`^dev-[0-9a-fA-F]{7,40}$`)
 var allowedGeoFiles = map[string]struct{}{"geoip.dat": {}, "geosite.dat": {}}
 var xrayCoreDownloadBaseURLs = []string{"https://github.com/XTLS/Xray-core/releases/download"}
 var validateXrayCoreDownloadURL = validatePublicHTTPURL
@@ -795,7 +796,7 @@ func nodeUpdateArgs(channel string, version string) ([]string, error) {
 		case "dev":
 			return append(args, "--dev"), nil
 		default:
-			if strings.HasPrefix(strings.ToLower(normalizedVersion), "dev-") {
+			if devVersionPattern.MatchString(normalizedVersion) {
 				return append(args, "--version", normalizedVersion), nil
 			}
 			if !releaseVersionPattern.MatchString(normalizedVersion) {
