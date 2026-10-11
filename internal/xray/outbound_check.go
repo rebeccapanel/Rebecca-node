@@ -88,7 +88,7 @@ func (c *Core) TestRoute(ctx context.Context, rawConfig string, inboundTag strin
 		return RouteTestRun{OutboundTestResult: OutboundTestResult{Error: "Failed to start test Xray instance", TestType: "latency"}}
 	}
 	if _, err := stdin.Write(configJSON); err != nil {
-		stopTestProcess(cmd)
+		stopTestProcess(cmd, nil)
 		return RouteTestRun{OutboundTestResult: OutboundTestResult{Error: "Route test failed", TestType: "latency"}}
 	}
 	_ = stdin.Close()
@@ -99,7 +99,7 @@ func (c *Core) TestRoute(ctx context.Context, rawConfig string, inboundTag strin
 		close(done)
 	}()
 	defer func() {
-		stopTestProcess(cmd)
+		stopTestProcess(cmd, done)
 		select {
 		case <-done:
 		case <-time.After(2 * time.Second):
@@ -251,7 +251,7 @@ func (c *Core) TestOutbound(ctx context.Context, outboundTag string, outboundPro
 		close(done)
 	}()
 	defer func() {
-		stopTestProcess(cmd)
+		stopTestProcess(cmd, done)
 		select {
 		case <-done:
 		case <-time.After(2 * time.Second):
@@ -608,9 +608,13 @@ func measureHTTPDelay(client *http.Client, testURL string) (int64, int, error) {
 	return time.Since(start).Milliseconds(), response.StatusCode, nil
 }
 
-func stopTestProcess(cmd *exec.Cmd) {
+func stopTestProcess(cmd *exec.Cmd, done <-chan struct{}) {
 	if cmd == nil || cmd.Process == nil {
 		return
 	}
-	terminateManagedProcess(cmd)
+	if done == nil {
+		killManagedProcess(cmd)
+		return
+	}
+	_ = terminateManagedProcess(cmd, done)
 }

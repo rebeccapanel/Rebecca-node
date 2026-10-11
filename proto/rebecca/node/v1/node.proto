@@ -18,6 +18,7 @@ service NodeRuntimeService {
   rpc AddUser(InboundUserRequest) returns (RuntimeActionResponse);
   rpc UpdateUser(InboundUserRequest) returns (RuntimeActionResponse);
   rpc RemoveUser(RemoveInboundUserRequest) returns (RuntimeActionResponse);
+  rpc ApplyUserBatch(UserBatchRequest) returns (UserBatchResponse);
   rpc Metrics(MetricsRequest) returns (MetricsResponse);
   rpc PublicIPs(PublicIPsRequest) returns (PublicIPsResponse);
   rpc TestOutbound(OutboundTestRequest) returns (OutboundTestResponse);
@@ -125,6 +126,35 @@ message RemoveInboundUserRequest {
   string inbound_tag = 2;
   string email = 3;
 }
+
+enum UserBatchAction {
+  USER_BATCH_ACTION_UNSPECIFIED = 0;
+  USER_BATCH_ACTION_UPSERT = 1;
+  USER_BATCH_ACTION_REMOVE = 2;
+}
+
+message UserBatchRequest {
+  string batch_id = 1;
+  repeated UserBatchOperation operations = 2;
+}
+
+message UserBatchOperation {
+  UserBatchAction action = 1;
+  string inbound_tag = 2;
+  InboundUser user = 3;
+  string email = 4;
+}
+
+message UserBatchResponse {
+  string batch_id = 1;
+  repeated UserBatchResult results = 2;
+}
+
+message UserBatchResult {
+  bool ok = 1;
+  string error = 2;
+}
+
 
 message InboundUser {
   string email = 1;

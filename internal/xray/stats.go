@@ -3,6 +3,7 @@ package xray
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"math"
 	"net"
@@ -396,6 +397,11 @@ func queryStats(apiHost string, apiPort int, timeout time.Duration, pattern stri
 	return res.GetStat(), nil
 }
 
+const apiDialTimeout = 3 * time.Second
+
+// ErrAPIUnavailable reports that the local Xray API could not be reached.
+var ErrAPIUnavailable = errors.New("Xray API is unavailable")
+
 func dialAPI(ctx context.Context, apiHost string, apiPort int) (*grpc.ClientConn, error) {
 	host := strings.TrimSpace(apiHost)
 	if host == "" || host == "0.0.0.0" || host == "::" || host == "[::]" {
@@ -403,12 +409,18 @@ func dialAPI(ctx context.Context, apiHost string, apiPort int) (*grpc.ClientConn
 	}
 	address := net.JoinHostPort(host, strconv.Itoa(apiPort))
 
-	return grpc.DialContext(
-		ctx,
+	dialCtx, cancel := context.WithTimeout(ctx, apiDialTimeout)
+	defer cancel()
+	conn, err := grpc.DialContext(
+		dialCtx,
 		address,
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 		grpc.WithBlock(),
 	)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrAPIUnavailable, err)
+	}
+	return conn, nil
 }
 
 func parseOutboundStatName(name string) (string, string, bool) {
