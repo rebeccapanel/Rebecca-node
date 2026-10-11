@@ -11,6 +11,7 @@ import (
 	"github.com/xtls/xray-core/common/serial"
 	hysteriaAccount "github.com/xtls/xray-core/proxy/hysteria/account"
 	"github.com/xtls/xray-core/proxy/shadowsocks"
+	shadowsocks2022 "github.com/xtls/xray-core/proxy/shadowsocks_2022"
 	"github.com/xtls/xray-core/proxy/trojan"
 	"github.com/xtls/xray-core/proxy/vless"
 	"github.com/xtls/xray-core/proxy/vmess"
@@ -139,6 +140,9 @@ func buildAccountMessage(user InboundUser) (proto.Message, error) {
 		if password == "" {
 			return nil, fmt.Errorf("password is required for shadowsocks")
 		}
+		if strings.HasPrefix(strings.ToLower(strings.TrimSpace(user.Method)), "2022-") {
+			return &shadowsocks2022.Account{Key: password}, nil
+		}
 		return &shadowsocks.Account{
 			Password:   password,
 			CipherType: resolveShadowsocksCipher(user),
@@ -174,12 +178,6 @@ func resolveShadowsocksCipher(user InboundUser) shadowsocks.CipherType {
 		return shadowsocks.CipherType_XCHACHA20_POLY1305
 	case "none":
 		return shadowsocks.CipherType_NONE
-	case "2022-blake3-aes-128-gcm":
-		return shadowsocks.CipherType(10)
-	case "2022-blake3-aes-256-gcm":
-		return shadowsocks.CipherType(11)
-	case "2022-blake3-chacha20-poly1305":
-		return shadowsocks.CipherType(12)
 	default:
 		return shadowsocks.CipherType_CHACHA20_POLY1305
 	}

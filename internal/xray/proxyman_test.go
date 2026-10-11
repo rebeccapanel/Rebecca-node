@@ -6,11 +6,24 @@ import (
 	"github.com/xtls/xray-core/common/serial"
 	hysteriaAccount "github.com/xtls/xray-core/proxy/hysteria/account"
 	"github.com/xtls/xray-core/proxy/shadowsocks"
+	shadowsocks2022 "github.com/xtls/xray-core/proxy/shadowsocks_2022"
 	"github.com/xtls/xray-core/proxy/trojan"
 	"github.com/xtls/xray-core/proxy/vless"
 	"github.com/xtls/xray-core/proxy/vmess"
 	"google.golang.org/protobuf/proto"
 )
+
+func TestShadowsocks2022UserUsesKeyAccount(t *testing.T) {
+	key := "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+	message, err := buildAccountMessage(InboundUser{Protocol: "shadowsocks", Password: key, Method: "2022-blake3-aes-256-gcm"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	account, ok := message.(*shadowsocks2022.Account)
+	if !ok || account.GetKey() != key {
+		t.Fatalf("2022 user must use a key account, got %T", message)
+	}
+}
 
 func TestBuildProtocolUserAccounts(t *testing.T) {
 	tests := []struct {
