@@ -3,28 +3,41 @@
 package xray
 
 import (
+	"fmt"
 	"os/exec"
 	"syscall"
-	"time"
 )
 
 func configureManagedProcess(cmd *exec.Cmd) {
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 }
 
-func terminateManagedProcess(cmd *exec.Cmd) {
+func terminateManagedProcess(cmd *exec.Cmd, exited <-chan struct{}) error {
 	if cmd == nil || cmd.Process == nil {
-		return
+		return nil
 	}
 	pid := cmd.Process.Pid
 	if pid <= 0 {
-		_ = cmd.Process.Kill()
-		return
+		return cmd.Process.Kill()
 	}
-	if err := syscall.Kill(-pid, syscall.SIGTERM); err != nil {
-		_ = cmd.Process.Kill()
-		return
+	_ = syscall.Kill(-pid, syscall.SIGTERM)
+	if waitProcessExit(exited, processExitGrace) {
+		return nil
 	}
-	time.Sleep(500 * time.Millisecond)
 	_ = syscall.Kill(-pid, syscall.SIGKILL)
+	if waitProcessExit(exited, processExitGrace) {
+		return nil
+	}
+	return fmt.Errorf("process group %d still running after SIGKILL", pid)
+}
+
+func killManagedProcess(cmd *exec.Cmd) {
+	if cmd == nil || cmd.Process == nil {
+		return
+	}
+	if cmd.Process.Pid > 0 {
+		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+	}
+	_ = cmd.Process.Kill()
+	_ = cmd.Wait()
 }

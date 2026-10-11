@@ -24,6 +24,7 @@ type Core struct {
 	executablePath string
 	assetsPath     string
 	cmd            *exec.Cmd
+	exited         chan struct{}
 	running        bool
 	logs           *LogBus
 	version        string
@@ -169,13 +170,15 @@ func (c *Core) start(config *Config) error {
 		return err
 	}
 	if _, err := stdin.Write(configJSON); err != nil {
-		terminateManagedProcess(cmd)
+		killManagedProcess(cmd)
 		return err
 	}
 	_ = stdin.Close()
 
+	exited := make(chan struct{})
 	c.mu.Lock()
 	c.cmd = cmd
+	c.exited = exited
 	c.running = true
 	c.startedAt = time.Now()
 	c.mu.Unlock()
@@ -194,8 +197,10 @@ func (c *Core) start(config *Config) error {
 			c.running = false
 			c.cmd = nil
 			c.startedAt = time.Time{}
+			c.exited = nil
 		}
 		c.mu.Unlock()
+		close(exited)
 	}()
 
 	return nil
@@ -204,20 +209,25 @@ func (c *Core) start(config *Config) error {
 func (c *Core) Stop() {
 	c.lifecycleMu.Lock()
 	defer c.lifecycleMu.Unlock()
-	c.stop()
+	if err := c.stop(); err != nil {
+		log.Printf("xray stop: %v", err)
+	}
 }
 
-func (c *Core) stop() {
+// stop returns only after the previous process has exited, so a replacement
+// never starts while the old one still holds its listening sockets.
+func (c *Core) stop() error {
 	c.mu.Lock()
-	cmd := c.cmd
-	c.cmd = nil
-	c.running = false
-	c.startedAt = time.Time{}
+	cmd, exited := c.cmd, c.exited
 	c.mu.Unlock()
-
-	if cmd != nil && cmd.Process != nil {
-		terminateManagedProcess(cmd)
+	if cmd == nil || cmd.Process == nil {
+		return nil
 	}
+	if err := terminateManagedProcess(cmd, exited); err != nil {
+		return err
+	}
+	<-exited
+	return nil
 }
 
 func (c *Core) Restart(config *Config) error {
@@ -227,7 +237,9 @@ func (c *Core) Restart(config *Config) error {
 	if err := c.validate(config); err != nil {
 		return err
 	}
-	c.stop()
+	if err := c.stop(); err != nil {
+		return fmt.Errorf("previous Xray process did not exit; replacement not started: %w", err)
+	}
 	return c.start(config)
 }
 
