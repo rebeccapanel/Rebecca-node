@@ -166,52 +166,66 @@ func (api *grpcAPI) RestartRuntime(ctx context.Context, req *nodev1.RuntimeConfi
 func (api *grpcAPI) StopRuntime(ctx context.Context, req *nodev1.StopRuntimeRequest) (*nodev1.RuntimeActionResponse, error) {
 	api.server.runtimeMu.Lock()
 	defer api.server.runtimeMu.Unlock()
+	stopIssues := map[string]string{}
 	if req.GetCollectUsageBeforeStop() {
 		api.server.snapshotRunningUsage()
 	}
 	api.server.core.Stop()
-	if err := api.server.ov.Apply(&ovRuntime{Inbounds: []ovRuntimeInbound{}}); err != nil {
+	if err := api.server.applyOpenVPNRuntime(&ovRuntime{Inbounds: []ovRuntimeInbound{}}); err != nil {
 		return nil, status.Error(codes.Unavailable, err.Error())
 	}
 	if err := api.server.l2tp.Apply(&l2tpRuntime{Inbounds: []l2tpRuntimeInbound{}}); err != nil {
+		api.server.recordNativeIssue("l2tp", "L2TP runtime stop failed: "+err.Error())
 		return nil, status.Error(codes.Unavailable, err.Error())
 	}
 	if err := api.server.pptp.Apply(&pptpRuntime{Inbounds: []pptpRuntimeInbound{}}); err != nil {
+		api.server.recordNativeIssue("pptp", "PPTP runtime stop failed: "+err.Error())
 		return nil, status.Error(codes.Unavailable, err.Error())
 	}
 	if err := api.server.wg.Apply(&wgRuntime{Inbounds: []wgRuntimeInbound{}}); err != nil {
+		stopIssues["wireguard"] = "WireGuard runtime stop failed: " + err.Error()
 		log.Printf("WireGuard runtime stop failed: %v", err)
 	}
 	if err := api.server.remoteAccess.ApplyIKEv2(&remoteAccessRuntime{Inbounds: []remoteAccessRuntimeInbound{}}); err != nil {
+		stopIssues["ikev2"] = "IKEv2 runtime stop failed: " + err.Error()
 		log.Printf("IKEv2 runtime stop failed: %v", err)
 	}
 	if err := api.server.remoteAccess.ApplyAnyConnect(&remoteAccessRuntime{Inbounds: []remoteAccessRuntimeInbound{}}); err != nil {
+		stopIssues["anyconnect"] = "AnyConnect runtime stop failed: " + err.Error()
 		log.Printf("AnyConnect runtime stop failed: %v", err)
 	}
 	if api.server.haproxy != nil {
 		if err := api.server.haproxy.Apply(&haproxyRuntime{}); err != nil {
+			stopIssues["haproxy"] = "HAProxy runtime stop failed: " + err.Error()
 			log.Printf("HAProxy runtime stop failed: %v", err)
 		}
 	}
 	if api.server.sshProxy != nil {
 		if err := api.server.sshProxy.Apply(&extraRuntime{}); err != nil {
+			stopIssues["ssh"] = "SSH runtime stop failed: " + err.Error()
 			log.Printf("SSH runtime stop failed: %v", err)
 		}
 	}
 	if api.server.external != nil {
 		if err := api.server.external.Apply(&extraRuntime{}); err != nil {
+			stopIssues["external-proxy"] = "External proxy runtime stop failed: " + err.Error()
 			log.Printf("external proxy runtime stop failed: %v", err)
 		}
 	}
 	if api.server.extraVPN != nil {
 		if err := api.server.extraVPN.Apply(&extraRuntime{}); err != nil {
+			stopIssues["extra-protocols"] = "Extra VPN runtime stop failed: " + err.Error()
 			log.Printf("extra VPN runtime stop failed: %v", err)
 		}
 	}
 	if err := api.server.ipBlocks.Clear(ctx); err != nil {
+		stopIssues["ip-blocks"] = "Source IP block cleanup failed: " + err.Error()
 		log.Printf("source IP block cleanup failed: %v", err)
 	}
 	api.server.clearConfigCache()
+	for protocol, message := range stopIssues {
+		api.server.recordNativeIssue(protocol, message)
+	}
 	return api.server.grpcAction(req.GetOperationId(), true, "runtime stopped"), nil
 }
 
@@ -262,6 +276,10 @@ func (api *grpcAPI) UpdateUser(ctx context.Context, req *nodev1.InboundUserReque
 	}
 	if !cacheAvailable {
 		return nil, status.Error(codes.FailedPrecondition, "runtime config cache is unavailable; sync config first")
+	}
+	user, err = api.server.inheritInboundUserFlow(inboundTag, user)
+	if err != nil {
+		return nil, status.Error(codes.Unavailable, err.Error())
 	}
 	diff := configUserDiffResult{}
 	if exists {
@@ -700,7 +718,7 @@ func (s *Server) grpcStartRuntime(ctx context.Context, req *nodev1.RuntimeConfig
 	if cacheExtraRuntime == nil {
 		cacheExtraRuntime = s.cachedExtraRuntime()
 	}
-	if err := s.ov.Apply(cacheRuntime); err != nil {
+	if err := s.applyOpenVPNRuntime(cacheRuntime); err != nil {
 		return nil, status.Error(codes.Unavailable, err.Error())
 	}
 	ikev2PrepareWarning := s.prepareIKEv2Runtime(cacheIKEv2Runtime)
@@ -772,7 +790,7 @@ func (s *Server) grpcRestartRuntime(ctx context.Context, req *nodev1.RuntimeConf
 	if cacheExtraRuntime == nil {
 		cacheExtraRuntime = s.cachedExtraRuntime()
 	}
-	if err := s.ov.Apply(cacheRuntime); err != nil {
+	if err := s.applyOpenVPNRuntime(cacheRuntime); err != nil {
 		return nil, status.Error(codes.Unavailable, err.Error())
 	}
 	ikev2PrepareWarning := s.prepareIKEv2Runtime(cacheIKEv2Runtime)
@@ -830,7 +848,7 @@ func (s *Server) grpcApplyRuntimeOnly(ctx context.Context, req *nodev1.RuntimeCo
 	if cacheExtraRuntime == nil {
 		cacheExtraRuntime = s.cachedExtraRuntime()
 	}
-	if err := s.ov.Apply(cacheRuntime); err != nil {
+	if err := s.applyOpenVPNRuntime(cacheRuntime); err != nil {
 		return nil, status.Error(codes.Unavailable, err.Error())
 	}
 	ikev2PrepareWarning := s.prepareIKEv2Runtime(cacheIKEv2Runtime)
@@ -1037,6 +1055,11 @@ func (s *Server) grpcAddUser(req *nodev1.InboundUserRequest, message string) (*n
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
+	user, err = s.inheritInboundUserFlow(inboundTag, user)
+	if err != nil {
+		return nil, status.Error(codes.Unavailable, err.Error())
+	}
+	user = withShadowsocksInboundMethod(user, s.shadowsocksInboundMethods(), inboundTag)
 	if err := xray.AddInboundUser(
 		s.settings.XrayAPIHost,
 		s.settings.XrayAPIPort,
@@ -1182,6 +1205,7 @@ func (s *Server) grpcRuntimeState(message string) *nodev1.RuntimeState {
 		Capabilities: []string{
 			"safe_user_reconciliation",
 			"targeted_user_update",
+			"user_batch",
 			"haproxy_runtime",
 			"grpc_control_port",
 			"mutual_tls_required",

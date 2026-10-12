@@ -72,14 +72,33 @@ github.com/refraction-networking/utls/internal/tls13
 ## explicit; go 1.20
 github.com/sagernet/sing/common
 github.com/sagernet/sing/common/atomic
+github.com/sagernet/sing/common/auth
+github.com/sagernet/sing/common/binary
 github.com/sagernet/sing/common/buf
+github.com/sagernet/sing/common/bufio
+github.com/sagernet/sing/common/cache
 github.com/sagernet/sing/common/control
 github.com/sagernet/sing/common/debug
 github.com/sagernet/sing/common/exceptions
 github.com/sagernet/sing/common/format
+github.com/sagernet/sing/common/logger
 github.com/sagernet/sing/common/metadata
 github.com/sagernet/sing/common/network
+github.com/sagernet/sing/common/pipe
+github.com/sagernet/sing/common/random
+github.com/sagernet/sing/common/replay
+github.com/sagernet/sing/common/rw
+github.com/sagernet/sing/common/task
+github.com/sagernet/sing/common/udpnat
+github.com/sagernet/sing/common/uot
+github.com/sagernet/sing/common/varbin
 github.com/sagernet/sing/common/x/constraints
+github.com/sagernet/sing/common/x/list
+# github.com/sagernet/sing-shadowsocks v0.2.7
+## explicit; go 1.18
+github.com/sagernet/sing-shadowsocks
+github.com/sagernet/sing-shadowsocks/shadowaead
+github.com/sagernet/sing-shadowsocks/shadowaead_2022
 # github.com/xtls/reality v0.0.0-20260322125925-9234c772ba8f
 ## explicit; go 1.24.0
 github.com/xtls/reality
@@ -127,6 +146,7 @@ github.com/xtls/xray-core/common/session
 github.com/xtls/xray-core/common/signal
 github.com/xtls/xray-core/common/signal/done
 github.com/xtls/xray-core/common/signal/semaphore
+github.com/xtls/xray-core/common/singbridge
 github.com/xtls/xray-core/common/strmatcher
 github.com/xtls/xray-core/common/task
 github.com/xtls/xray-core/common/utils
@@ -145,6 +165,7 @@ github.com/xtls/xray-core/main/confloader
 github.com/xtls/xray-core/proxy
 github.com/xtls/xray-core/proxy/hysteria/account
 github.com/xtls/xray-core/proxy/shadowsocks
+github.com/xtls/xray-core/proxy/shadowsocks_2022
 github.com/xtls/xray-core/proxy/trojan
 github.com/xtls/xray-core/proxy/vless
 github.com/xtls/xray-core/proxy/vless/encryption

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os/exec"
 	"path/filepath"
+	"strings"
 
 	nodev1 "github.com/rebeccapanel/rebecca-node/internal/proto/node/v1"
 	"golang.zx2c4.com/wireguard/wgctrl"
@@ -22,6 +23,9 @@ func protocolState(protocol string, configured, running int, version string) *no
 	detail := ""
 	if configured > 0 {
 		detail = fmt.Sprintf("%d/%d running", running, configured)
+		if running < configured {
+			detail += fmt.Sprintf("; %s is configured but %d instance(s) are not running. Check the service configuration and logs", protocol, configured-running)
+		}
 	}
 	return &nodev1.ProtocolStatus{Protocol: protocol, State: state, Detail: detail, Inbounds: uint32(configured), Version: version}
 }
@@ -29,6 +33,12 @@ func protocolState(protocol string, configured, running int, version string) *no
 func (s *Server) protocolStatuses() []*nodev1.ProtocolStatus {
 	s.mu.Lock()
 	config := s.lastConfig
+	startupError := s.startupError
+	runtimeStopped := s.runtimeStopped
+	nativeErrors := map[string]string{}
+	for protocol, message := range s.nativeErrors {
+		nativeErrors[protocol] = message
+	}
 	s.mu.Unlock()
 	xrayInbounds := 0
 	if config != nil {
@@ -39,6 +49,18 @@ func (s *Server) protocolStatuses() []*nodev1.ProtocolStatus {
 		xrayRunning = xrayInbounds
 	}
 	statuses := []*nodev1.ProtocolStatus{protocolState("xray", xrayInbounds, xrayRunning, s.core.Version())}
+	if !s.core.Started() {
+		if startupError != "" {
+			statuses[0].State, statuses[0].Detail = "error", startupError
+		} else if xrayInbounds > 0 {
+			for _, line := range s.core.Logs().Snapshot() {
+				lower := strings.ToLower(line)
+				if strings.Contains(lower, "failed") || strings.Contains(lower, "fatal") || strings.Contains(lower, "panic") || strings.Contains(lower, "address already in use") {
+					statuses[0].Detail = line
+				}
+			}
+		}
+	}
 
 	ovConfigured, ovRunning := 0, 0
 	if s.ov != nil {
@@ -147,7 +169,15 @@ func (s *Server) protocolStatuses() []*nodev1.ProtocolStatus {
 		}
 		statuses = append(statuses, protocolState(protocol, configured, running, ""))
 	}
-	return statuses
+	for _, state := range statuses {
+		if runtimeStopped && state.Inbounds > 0 {
+			state.State, state.Detail = "disabled", "Stopped by operator"
+		}
+	}
+	for protocol, message := range nativeErrors {
+		statuses = append(statuses, &nodev1.ProtocolStatus{Protocol: protocol + "/configuration", State: "error", Detail: message})
+	}
+	return append(statuses, s.serviceDiagnostics()...)
 }
 
 func runningWireGuardInbounds(runtime *wgRuntime) int {

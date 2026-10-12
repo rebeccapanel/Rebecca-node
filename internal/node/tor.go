@@ -411,15 +411,8 @@ func testSocks5Connect(port int, host string, targetPort uint16) error {
 	defer conn.Close()
 	_ = conn.SetDeadline(time.Now().Add(10 * time.Second))
 	r := bufio.NewReader(conn)
-	if _, err := conn.Write([]byte{0x05, 0x01, 0x00}); err != nil {
+	if err := authenticateSOCKS5(conn, "", ""); err != nil {
 		return err
-	}
-	header := make([]byte, 2)
-	if _, err := io.ReadFull(r, header); err != nil {
-		return err
-	}
-	if header[0] != 0x05 || header[1] != 0x00 {
-		return fmt.Errorf("SOCKS auth rejected")
 	}
 	hostBytes := []byte(host)
 	if len(hostBytes) > 255 {

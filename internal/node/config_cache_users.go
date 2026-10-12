@@ -13,6 +13,31 @@ func (s *Server) addUserToConfigCache(inboundTag string, user xray.InboundUser) 
 	return s.patchConfigCacheUser(inboundTag, user, "")
 }
 
+func (s *Server) inheritInboundUserFlow(inboundTag string, user xray.InboundUser) (xray.InboundUser, error) {
+	if user.Protocol != "vless" || user.Flow != "" {
+		return user, nil
+	}
+	s.mu.Lock()
+	payload, ok := s.loadConfigCache()
+	s.mu.Unlock()
+	if !ok {
+		return user, nil
+	}
+	var config map[string]any
+	if err := json.Unmarshal([]byte(payload.Config), &config); err != nil {
+		return user, err
+	}
+	for _, value := range anySlice(config["inbounds"]) {
+		inbound, _ := value.(map[string]any)
+		if asString(inbound["tag"]) == inboundTag && asString(inbound["protocol"]) == "vless" {
+			settings, _ := inbound["settings"].(map[string]any)
+			user.Flow = strings.TrimSpace(asString(settings["flow"]))
+			break
+		}
+	}
+	return user, nil
+}
+
 func (s *Server) removeUserFromConfigCache(inboundTag string, email string) error {
 	return s.patchConfigCacheUser(inboundTag, xray.InboundUser{}, email)
 }
@@ -28,7 +53,53 @@ func (s *Server) applyConfigCacheUserDiff(incomingConfig string) error {
 	if err != nil {
 		return err
 	}
+	methods := shadowsocksMethodsFromConfig(incomingConfig)
+	for index := range diff.add {
+		diff.add[index].user = withShadowsocksInboundMethod(diff.add[index].user, methods, diff.add[index].inboundTag)
+	}
+	for index := range diff.update {
+		diff.update[index].current = withShadowsocksInboundMethod(diff.update[index].current, methods, diff.update[index].inboundTag)
+	}
 	return s.applyConfigUserDiffResult(diff)
+}
+
+func (s *Server) shadowsocksInboundMethods() map[string]string {
+	s.mu.Lock()
+	payload, ok := s.loadConfigCache()
+	s.mu.Unlock()
+	if !ok {
+		return nil
+	}
+	return shadowsocksMethodsFromConfig(payload.Config)
+}
+
+func shadowsocksMethodsFromConfig(rawConfig string) map[string]string {
+	methods := map[string]string{}
+	var config struct {
+		Inbounds []struct {
+			Tag      string         `json:"tag"`
+			Protocol string         `json:"protocol"`
+			Settings map[string]any `json:"settings"`
+		} `json:"inbounds"`
+	}
+	if err := json.Unmarshal([]byte(rawConfig), &config); err != nil {
+		return methods
+	}
+	for _, inbound := range config.Inbounds {
+		if strings.EqualFold(strings.TrimSpace(inbound.Protocol), "shadowsocks") {
+			methods[strings.TrimSpace(inbound.Tag)] = strings.TrimSpace(asString(inbound.Settings["method"]))
+		}
+	}
+	return methods
+}
+
+func withShadowsocksInboundMethod(user xray.InboundUser, methods map[string]string, inboundTag string) xray.InboundUser {
+	if strings.EqualFold(strings.TrimSpace(user.Protocol), "shadowsocks") {
+		if method := methods[strings.TrimSpace(inboundTag)]; method != "" {
+			user.Method = method
+		}
+	}
+	return user
 }
 
 func (s *Server) applyConfigUserDiffResult(diff configUserDiffResult) error {
@@ -104,9 +175,8 @@ func (s *Server) patchConfigCacheUser(inboundTag string, user xray.InboundUser, 
 		return fmt.Errorf("inbound_tag is required")
 	}
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
+	// Public user/runtime operations already hold runtimeMu. Do not hold the
+	// session mutex while saving: diagnostic config updates acquire it too.
 	payload, ok := s.loadConfigCache()
 	if !ok {
 		return nil
@@ -162,7 +232,11 @@ func patchConfigCacheUserJSON(rawConfig string, inboundTag string, user xray.Inb
 			next = append(next, client)
 		}
 		if adding {
-			next = append(next, inboundUserClientMap(user))
+			client := inboundUserClientMap(user)
+			if strings.HasPrefix(asString(settings["method"]), "2022-") {
+				delete(client, "method")
+			}
+			next = append(next, client)
 			changed = true
 		}
 		settings["clients"] = next
@@ -338,6 +412,9 @@ func configClientStates(rawConfig string) (map[string]configClientState, error) 
 			}
 			if user.Email == "" {
 				continue
+			}
+			if protocol == "vless" && user.Flow == "" {
+				user.Flow = strings.TrimSpace(asString(settings["flow"]))
 			}
 			state.clients[user.Email] = user
 			encoded, _ := json.Marshal(client)

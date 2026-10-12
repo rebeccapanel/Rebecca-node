@@ -47,7 +47,7 @@ func (s *Server) reconcileManagedProxyServices(ctx context.Context, raw string) 
 		}
 		port, username, password, ok := localSocksDetails(outbound)
 		if !ok {
-			return fmt.Errorf("managed %s outbound %q must use a local SOCKS server", kind, managedString(outbound["tag"]))
+			return fmt.Errorf("managed %s outbound %q uses protocol %q; it requires SOCKS with a loopback server (127.0.0.1 or ::1) and a port between 1024 and 65535. Its service cannot be configured from this outbound", kind, managedString(outbound["tag"]), managedString(outbound["protocol"]))
 		}
 		if ports[port] {
 			return fmt.Errorf("managed proxy port %d is used by more than one outbound", port)

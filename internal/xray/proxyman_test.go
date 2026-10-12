@@ -1,16 +1,57 @@
 package xray
 
 import (
+	"encoding/base64"
 	"testing"
 
+	"github.com/xtls/xray-core/common/protocol"
 	"github.com/xtls/xray-core/common/serial"
 	hysteriaAccount "github.com/xtls/xray-core/proxy/hysteria/account"
 	"github.com/xtls/xray-core/proxy/shadowsocks"
+	shadowsocks2022 "github.com/xtls/xray-core/proxy/shadowsocks_2022"
 	"github.com/xtls/xray-core/proxy/trojan"
 	"github.com/xtls/xray-core/proxy/vless"
 	"github.com/xtls/xray-core/proxy/vmess"
 	"google.golang.org/protobuf/proto"
 )
+
+func TestShadowsocks2022UserUsesKeyAccount(t *testing.T) {
+	key := "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+	message, err := buildAccountMessage(InboundUser{Protocol: "shadowsocks", Password: key, Method: "2022-blake3-aes-256-gcm"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	account, ok := message.(*shadowsocks2022.Account)
+	if !ok || account.GetKey() != key {
+		t.Fatalf("2022 user must use a key account, got %T", message)
+	}
+}
+
+func TestShadowsocks2022UserRoundTripsIntoXrayAccount(t *testing.T) {
+	key := base64.StdEncoding.EncodeToString(make([]byte, 32))
+	message, err := buildAccountMessage(InboundUser{Protocol: "shadowsocks", Password: key, Method: "2022-blake3-aes-256-gcm"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	user := &protocol.User{Email: "u", Account: serial.ToTypedMessage(message)}
+	memory, err := user.ToMemoryUser()
+	if err != nil {
+		t.Fatal(err)
+	}
+	account, ok := memory.Account.(*shadowsocks2022.MemoryAccount)
+	if !ok || account.Key != key {
+		t.Fatalf("Xray must convert the user into a 2022 memory account, got %T", memory.Account)
+	}
+}
+
+func TestShadowsocks2022UserRejectsWrongKeyLength(t *testing.T) {
+	if _, err := buildAccountMessage(InboundUser{Protocol: "shadowsocks", Password: "c2VjcmV0", Method: "2022-blake3-aes-256-gcm"}); err == nil {
+		t.Fatal("a non-32-byte key must be rejected for aes-256")
+	}
+	if _, err := buildAccountMessage(InboundUser{Protocol: "shadowsocks", Password: "AAAAAAAAAAAAAAAAAAAAAA==", Method: "2022-blake3-aes-128-gcm"}); err != nil {
+		t.Fatalf("a 16-byte key must be accepted for aes-128: %v", err)
+	}
+}
 
 func TestBuildProtocolUserAccounts(t *testing.T) {
 	tests := []struct {

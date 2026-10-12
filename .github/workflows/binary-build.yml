@@ -20,6 +20,9 @@ permissions:
 
 jobs:
   build-extra-vpn-assets:
+    # Pinned companion runtimes are unchanged by node-only dev updates. Keep
+    # existing dev assets; rebuild them for releases or an explicit manual run.
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'release' || github.ref_type == 'tag'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -77,6 +80,7 @@ jobs:
           path: dist/rebecca-*
 
   build-patched-telemt:
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'release' || github.ref_type == 'tag'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -207,6 +211,10 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
+
+      - name: Test runtime safety and user synchronization
+        if: steps.meta.outputs.should_build == 'true' && matrix.asset_arch == 'amd64'
+        run: go test ./internal/node ./internal/xray -count=1 -timeout=150s
 
       - name: Build binary
         if: steps.meta.outputs.should_build == 'true'
@@ -359,7 +367,14 @@ jobs:
       - build-patched-telemt
       - build-linux
       - build-windows-amd64
-    if: github.event_name == 'push' && github.ref == 'refs/heads/dev'
+    # Native jobs are intentionally skipped on ordinary dev pushes. A skipped
+    # dependency must not prevent publication of successful node binaries.
+    if: >-
+      always() && github.ref == 'refs/heads/dev' &&
+      (github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&
+      needs.build-linux.result == 'success' && needs.build-windows-amd64.result == 'success' &&
+      (needs.build-extra-vpn-assets.result == 'success' || needs.build-extra-vpn-assets.result == 'skipped') &&
+      (needs.build-patched-telemt.result == 'success' || needs.build-patched-telemt.result == 'skipped')
 
     steps:
       - name: Download dev artifacts

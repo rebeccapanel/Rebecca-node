@@ -31,27 +31,37 @@ import (
 )
 
 type Server struct {
-	settings     appconfig.Settings
-	core         *xray.Core
-	ov           *ovManager
-	l2tp         *l2tpManager
-	pptp         *pptpManager
-	wg           *wgManager
-	remoteAccess *remoteAccessManager
-	haproxy      *haproxyManager
-	sshProxy     *sshProxyManager
-	external     *externalProxyManager
-	extraVPN     *extraVPNManager
-	ipBlocks     *sourceIPBlocker
-	usage        *usageBuffer
-	system       *systemSampler
-	operations   *operationDeduper
+	settings              appconfig.Settings
+	core                  *xray.Core
+	configCacheMu         sync.Mutex
+	configCacheBatch      *cachedConfigPayload
+	configCacheBatchDirty bool
+	ov                    *ovManager
+	l2tp                  *l2tpManager
+	pptp                  *pptpManager
+	wg                    *wgManager
+	remoteAccess          *remoteAccessManager
+	haproxy               *haproxyManager
+	sshProxy              *sshProxyManager
+	external              *externalProxyManager
+	extraVPN              *extraVPNManager
+	ipBlocks              *sourceIPBlocker
+	usage                 *usageBuffer
+	system                *systemSampler
+	operations            *operationDeduper
 
-	mu         sync.Mutex
-	connected  bool
-	clientIP   string
-	sessions   map[string]time.Time
-	lastConfig *xray.Config
+	mu               sync.Mutex
+	connected        bool
+	clientIP         string
+	sessions         map[string]time.Time
+	lastConfig       *xray.Config
+	diagnosticConfig proxyDiagnosticConfig
+	startupError     string
+	nativeErrors     map[string]string
+	runtimeStopped   bool
+	diagnosticsMu    sync.Mutex
+	diagnosticsAt    time.Time
+	diagnostics      []*nodev1.ProtocolStatus
 
 	// runtimeMu serializes whole runtime operations (start/restart/stop/sync and
 	// user add/update/remove) so two concurrent pushes from the master can never
@@ -69,6 +79,7 @@ const sessionTTL = 30 * time.Minute
 
 var xrayVersionPattern = regexp.MustCompile(`^v\d+\.\d+\.\d+(?:[-+._A-Za-z0-9]*)?$`)
 var releaseVersionPattern = regexp.MustCompile(`^v?\d+(?:\.\d+){1,3}(?:[-+._A-Za-z0-9]*)?$`)
+var devVersionPattern = regexp.MustCompile(`^dev-[0-9a-fA-F]{7,40}$`)
 var allowedGeoFiles = map[string]struct{}{"geoip.dat": {}, "geosite.dat": {}}
 var xrayCoreDownloadBaseURLs = []string{"https://github.com/XTLS/Xray-core/releases/download"}
 var validateXrayCoreDownloadURL = validatePublicHTTPURL
@@ -246,6 +257,7 @@ func (s *Server) saveConfigCacheWithHAProxy(rawConfig string, peerIP string, run
 	if strings.TrimSpace(rawConfig) == "" {
 		return
 	}
+	s.setDiagnosticConfig(rawConfig)
 	var ikev2Runtime, anyConnectRuntime *remoteAccessRuntime
 	if len(remoteRuntimes) > 0 {
 		ikev2Runtime = remoteRuntimes[0]
@@ -257,16 +269,8 @@ func (s *Server) saveConfigCacheWithHAProxy(rawConfig string, peerIP string, run
 	if cached, ok := s.loadConfigCache(); ok {
 		appliedRevision = cached.AppliedRevision
 	}
-	payload, err := json.Marshal(cachedConfigPayload{AppliedRevision: appliedRevision, Config: rawConfig, PeerIP: peerIP, OVRuntime: runtimeConfig, L2TPRuntime: l2tpRuntimeConfig, PPTPRuntime: pptpRuntimeConfig, WGRuntime: wgRuntimeConfig, IKEv2Runtime: ikev2Runtime, AnyConnectRuntime: anyConnectRuntime, HAProxyRuntime: haproxyRuntimeConfig, ExtraRuntime: extraRuntimeConfig})
-	if err != nil {
-		return
-	}
-	path := s.configCachePath()
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		log.Printf("failed to create config cache directory: %v", err)
-		return
-	}
-	if err := writeFileAtomic(path, payload, 0o600); err != nil {
+	payload := cachedConfigPayload{AppliedRevision: appliedRevision, Config: rawConfig, PeerIP: peerIP, OVRuntime: runtimeConfig, L2TPRuntime: l2tpRuntimeConfig, PPTPRuntime: pptpRuntimeConfig, WGRuntime: wgRuntimeConfig, IKEv2Runtime: ikev2Runtime, AnyConnectRuntime: anyConnectRuntime, HAProxyRuntime: haproxyRuntimeConfig, ExtraRuntime: extraRuntimeConfig}
+	if err := s.persistConfigCache(payload); err != nil {
 		log.Printf("failed to save config cache: %v", err)
 	}
 }
@@ -288,11 +292,7 @@ func (s *Server) setAppliedRevision(revision uint64) {
 		return
 	}
 	payload.AppliedRevision = revision
-	raw, err := json.Marshal(payload)
-	if err != nil {
-		return
-	}
-	if err := writeFileAtomic(s.configCachePath(), raw, 0o600); err != nil {
+	if err := s.persistConfigCache(payload); err != nil {
 		log.Printf("failed to save applied revision: %v", err)
 	}
 }
@@ -336,6 +336,66 @@ func writeFileAtomic(path string, data []byte, mode os.FileMode) error {
 }
 
 func (s *Server) loadConfigCache() (cachedConfigPayload, bool) {
+	s.configCacheMu.Lock()
+	if s.configCacheBatch != nil {
+		payload := *s.configCacheBatch
+		s.configCacheMu.Unlock()
+		return payload, true
+	}
+	s.configCacheMu.Unlock()
+	return s.readConfigCacheFile()
+}
+
+func (s *Server) beginConfigCacheBatch() {
+	payload, ok := s.readConfigCacheFile()
+	s.configCacheMu.Lock()
+	defer s.configCacheMu.Unlock()
+	if s.configCacheBatch != nil || !ok {
+		return
+	}
+	s.configCacheBatch = &payload
+	s.configCacheBatchDirty = false
+}
+
+func (s *Server) endConfigCacheBatch() error {
+	s.configCacheMu.Lock()
+	batch := s.configCacheBatch
+	dirty := s.configCacheBatchDirty
+	s.configCacheBatch = nil
+	s.configCacheBatchDirty = false
+	s.configCacheMu.Unlock()
+	if batch == nil || !dirty {
+		return nil
+	}
+	return s.writeConfigCacheFile(*batch)
+}
+
+func (s *Server) persistConfigCache(payload cachedConfigPayload) error {
+	s.configCacheMu.Lock()
+	if s.configCacheBatch != nil {
+		batched := payload
+		s.configCacheBatch = &batched
+		s.configCacheBatchDirty = true
+		s.configCacheMu.Unlock()
+		return nil
+	}
+	s.configCacheMu.Unlock()
+	return s.writeConfigCacheFile(payload)
+}
+
+func (s *Server) writeConfigCacheFile(payload cachedConfigPayload) error {
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+	path := s.configCachePath()
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+	return writeFileAtomic(path, raw, 0o600)
+}
+
+func (s *Server) readConfigCacheFile() (cachedConfigPayload, bool) {
 	var payload cachedConfigPayload
 	raw, err := os.ReadFile(s.configCachePath())
 	if err != nil {
@@ -417,7 +477,8 @@ func (s *Server) cachedExtraRuntime() *extraRuntime {
 	return payload.ExtraRuntime
 }
 
-func (s *Server) applyL2TPRuntime(runtimeConfig *l2tpRuntime) string {
+func (s *Server) applyL2TPRuntime(runtimeConfig *l2tpRuntime) (result string) {
+	defer func() { s.recordNativeIssue("l2tp", result) }()
 	if err := s.l2tp.Apply(runtimeConfig); err != nil {
 		warning := "L2TP runtime apply failed: " + err.Error()
 		log.Print(warning)
@@ -426,7 +487,18 @@ func (s *Server) applyL2TPRuntime(runtimeConfig *l2tpRuntime) string {
 	return ""
 }
 
-func (s *Server) applyPPTPRuntime(runtimeConfig *pptpRuntime) string {
+func (s *Server) applyOpenVPNRuntime(runtimeConfig *ovRuntime) error {
+	err := s.ov.Apply(runtimeConfig)
+	message := ""
+	if err != nil {
+		message = "OpenVPN runtime apply failed: " + err.Error()
+	}
+	s.recordNativeIssue("openvpn", message)
+	return err
+}
+
+func (s *Server) applyPPTPRuntime(runtimeConfig *pptpRuntime) (result string) {
+	defer func() { s.recordNativeIssue("pptp", result) }()
 	if err := s.pptp.Apply(runtimeConfig); err != nil {
 		warning := "PPTP runtime apply failed: " + err.Error()
 		log.Print(warning)
@@ -435,7 +507,8 @@ func (s *Server) applyPPTPRuntime(runtimeConfig *pptpRuntime) string {
 	return ""
 }
 
-func (s *Server) applyWGRuntime(runtimeConfig *wgRuntime) string {
+func (s *Server) applyWGRuntime(runtimeConfig *wgRuntime) (result string) {
+	defer func() { s.recordNativeIssue("wireguard", result) }()
 	if err := s.wg.Apply(runtimeConfig); err != nil {
 		warning := "WireGuard runtime apply failed: " + err.Error()
 		log.Print(warning)
@@ -444,7 +517,8 @@ func (s *Server) applyWGRuntime(runtimeConfig *wgRuntime) string {
 	return ""
 }
 
-func (s *Server) applyIKEv2Runtime(runtimeConfig *remoteAccessRuntime) string {
+func (s *Server) applyIKEv2Runtime(runtimeConfig *remoteAccessRuntime) (result string) {
+	defer func() { s.recordNativeIssue("ikev2", result) }()
 	if err := s.remoteAccess.ApplyIKEv2(runtimeConfig); err != nil {
 		warning := "IKEv2 runtime apply failed: " + err.Error()
 		log.Print(warning)
@@ -453,7 +527,8 @@ func (s *Server) applyIKEv2Runtime(runtimeConfig *remoteAccessRuntime) string {
 	return ""
 }
 
-func (s *Server) prepareIKEv2Runtime(runtimeConfig *remoteAccessRuntime) string {
+func (s *Server) prepareIKEv2Runtime(runtimeConfig *remoteAccessRuntime) (result string) {
+	defer func() { s.recordNativeIssue("ikev2-prerequisites", result) }()
 	if runtimeConfig == nil || len(runtimeConfig.Inbounds) == 0 {
 		return ""
 	}
@@ -465,7 +540,8 @@ func (s *Server) prepareIKEv2Runtime(runtimeConfig *remoteAccessRuntime) string 
 	return ""
 }
 
-func (s *Server) applyAnyConnectRuntime(runtimeConfig *remoteAccessRuntime) string {
+func (s *Server) applyAnyConnectRuntime(runtimeConfig *remoteAccessRuntime) (result string) {
+	defer func() { s.recordNativeIssue("anyconnect", result) }()
 	if err := s.remoteAccess.ApplyAnyConnect(runtimeConfig); err != nil {
 		warning := "AnyConnect runtime apply failed: " + err.Error()
 		log.Print(warning)
@@ -474,7 +550,8 @@ func (s *Server) applyAnyConnectRuntime(runtimeConfig *remoteAccessRuntime) stri
 	return ""
 }
 
-func (s *Server) applyHAProxyRuntime(runtimeConfig *haproxyRuntime) string {
+func (s *Server) applyHAProxyRuntime(runtimeConfig *haproxyRuntime) (result string) {
+	defer func() { s.recordNativeIssue("haproxy", result) }()
 	if s.haproxy == nil {
 		if runtimeConfig == nil || !runtimeConfig.Enabled {
 			return ""
@@ -489,7 +566,8 @@ func (s *Server) applyHAProxyRuntime(runtimeConfig *haproxyRuntime) string {
 	return ""
 }
 
-func (s *Server) applyExtraRuntime(runtimeConfig *extraRuntime) string {
+func (s *Server) applyExtraRuntime(runtimeConfig *extraRuntime) (result string) {
+	defer func() { s.recordNativeIssue("extra-protocols", result) }()
 	warnings := []string{}
 	hasSSH, hasExternal, hasExtraVPN := false, false, false
 	if runtimeConfig != nil {
@@ -546,20 +624,41 @@ func joinedWarnings(values ...string) string {
 }
 
 func (s *Server) clearConfigCache() {
+	s.mu.Lock()
+	s.runtimeStopped = true
+	s.nativeErrors = nil
+	s.startupError = ""
+	s.diagnosticConfig = proxyDiagnosticConfig{}
+	s.mu.Unlock()
+	s.diagnosticsMu.Lock()
+	s.diagnosticsAt = time.Time{}
+	s.diagnosticsMu.Unlock()
 	if err := os.Remove(s.configCachePath()); err != nil && !errors.Is(err, os.ErrNotExist) {
 		log.Printf("failed to clear config cache: %v", err)
 	}
 }
 
-func (s *Server) startCachedConfig(restart bool) error {
+func (s *Server) startCachedConfig(restart bool) (resultErr error) {
+	defer func() {
+		s.mu.Lock()
+		s.startupError = ""
+		if resultErr != nil {
+			s.startupError = resultErr.Error()
+		}
+		s.mu.Unlock()
+	}()
 	payload, ok := s.loadConfigCache()
 	if !ok {
+		if _, err := os.Stat(s.configCachePath()); !os.IsNotExist(err) {
+			return fmt.Errorf("cached runtime configuration is unreadable or invalid; sync a valid configuration from the master")
+		}
 		s.clearCachedAuxiliaryRuntimes()
 		if restart {
 			return errors.New("runtime config cache is unavailable; sync config first")
 		}
 		return nil
 	}
+	s.setDiagnosticConfig(payload.Config)
 	if err := s.reconcileManagedProxyServices(context.Background(), payload.Config); err != nil {
 		log.Printf("managed proxy reconciliation failed: %v", err)
 		return err
@@ -588,7 +687,7 @@ func (s *Server) startCachedConfig(restart bool) error {
 	s.mu.Lock()
 	s.lastConfig = cfg
 	s.mu.Unlock()
-	if err := s.ov.Apply(payload.OVRuntime); err != nil {
+	if err := s.applyOpenVPNRuntime(payload.OVRuntime); err != nil {
 		log.Printf("OpenVPN cached runtime apply failed: %v", err)
 	}
 	s.prepareIKEv2Runtime(payload.IKEv2Runtime)
@@ -748,7 +847,7 @@ func nodeUpdateArgs(channel string, version string) ([]string, error) {
 		case "dev":
 			return append(args, "--dev"), nil
 		default:
-			if strings.HasPrefix(strings.ToLower(normalizedVersion), "dev-") {
+			if devVersionPattern.MatchString(normalizedVersion) {
 				return append(args, "--version", normalizedVersion), nil
 			}
 			if !releaseVersionPattern.MatchString(normalizedVersion) {

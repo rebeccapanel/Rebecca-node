@@ -204,6 +204,7 @@ const (
 	NodeRuntimeService_AddUser_FullMethodName             = "/rebecca.node.v1.NodeRuntimeService/AddUser"
 	NodeRuntimeService_UpdateUser_FullMethodName          = "/rebecca.node.v1.NodeRuntimeService/UpdateUser"
 	NodeRuntimeService_RemoveUser_FullMethodName          = "/rebecca.node.v1.NodeRuntimeService/RemoveUser"
+	NodeRuntimeService_ApplyUserBatch_FullMethodName      = "/rebecca.node.v1.NodeRuntimeService/ApplyUserBatch"
 	NodeRuntimeService_Metrics_FullMethodName             = "/rebecca.node.v1.NodeRuntimeService/Metrics"
 	NodeRuntimeService_PublicIPs_FullMethodName           = "/rebecca.node.v1.NodeRuntimeService/PublicIPs"
 	NodeRuntimeService_TestOutbound_FullMethodName        = "/rebecca.node.v1.NodeRuntimeService/TestOutbound"
@@ -230,6 +231,7 @@ type NodeRuntimeServiceClient interface {
 	AddUser(ctx context.Context, in *InboundUserRequest, opts ...grpc.CallOption) (*RuntimeActionResponse, error)
 	UpdateUser(ctx context.Context, in *InboundUserRequest, opts ...grpc.CallOption) (*RuntimeActionResponse, error)
 	RemoveUser(ctx context.Context, in *RemoveInboundUserRequest, opts ...grpc.CallOption) (*RuntimeActionResponse, error)
+	ApplyUserBatch(ctx context.Context, in *UserBatchRequest, opts ...grpc.CallOption) (*UserBatchResponse, error)
 	Metrics(ctx context.Context, in *MetricsRequest, opts ...grpc.CallOption) (*MetricsResponse, error)
 	PublicIPs(ctx context.Context, in *PublicIPsRequest, opts ...grpc.CallOption) (*PublicIPsResponse, error)
 	TestOutbound(ctx context.Context, in *OutboundTestRequest, opts ...grpc.CallOption) (*OutboundTestResponse, error)
@@ -317,6 +319,16 @@ func (c *nodeRuntimeServiceClient) RemoveUser(ctx context.Context, in *RemoveInb
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(RuntimeActionResponse)
 	err := c.cc.Invoke(ctx, NodeRuntimeService_RemoveUser_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *nodeRuntimeServiceClient) ApplyUserBatch(ctx context.Context, in *UserBatchRequest, opts ...grpc.CallOption) (*UserBatchResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(UserBatchResponse)
+	err := c.cc.Invoke(ctx, NodeRuntimeService_ApplyUserBatch_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -464,6 +476,7 @@ type NodeRuntimeServiceServer interface {
 	AddUser(context.Context, *InboundUserRequest) (*RuntimeActionResponse, error)
 	UpdateUser(context.Context, *InboundUserRequest) (*RuntimeActionResponse, error)
 	RemoveUser(context.Context, *RemoveInboundUserRequest) (*RuntimeActionResponse, error)
+	ApplyUserBatch(context.Context, *UserBatchRequest) (*UserBatchResponse, error)
 	Metrics(context.Context, *MetricsRequest) (*MetricsResponse, error)
 	PublicIPs(context.Context, *PublicIPsRequest) (*PublicIPsResponse, error)
 	TestOutbound(context.Context, *OutboundTestRequest) (*OutboundTestResponse, error)
@@ -507,6 +520,9 @@ func (UnimplementedNodeRuntimeServiceServer) UpdateUser(context.Context, *Inboun
 }
 func (UnimplementedNodeRuntimeServiceServer) RemoveUser(context.Context, *RemoveInboundUserRequest) (*RuntimeActionResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method RemoveUser not implemented")
+}
+func (UnimplementedNodeRuntimeServiceServer) ApplyUserBatch(context.Context, *UserBatchRequest) (*UserBatchResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ApplyUserBatch not implemented")
 }
 func (UnimplementedNodeRuntimeServiceServer) Metrics(context.Context, *MetricsRequest) (*MetricsResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Metrics not implemented")
@@ -690,6 +706,24 @@ func _NodeRuntimeService_RemoveUser_Handler(srv interface{}, ctx context.Context
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(NodeRuntimeServiceServer).RemoveUser(ctx, req.(*RemoveInboundUserRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _NodeRuntimeService_ApplyUserBatch_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(UserBatchRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(NodeRuntimeServiceServer).ApplyUserBatch(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: NodeRuntimeService_ApplyUserBatch_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(NodeRuntimeServiceServer).ApplyUserBatch(ctx, req.(*UserBatchRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -962,6 +996,10 @@ var NodeRuntimeService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "RemoveUser",
 			Handler:    _NodeRuntimeService_RemoveUser_Handler,
+		},
+		{
+			MethodName: "ApplyUserBatch",
+			Handler:    _NodeRuntimeService_ApplyUserBatch_Handler,
 		},
 		{
 			MethodName: "Metrics",

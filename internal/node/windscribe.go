@@ -699,6 +699,9 @@ func waitForAuthenticatedSocks(port int, username, password string, timeout time
 }
 
 func testAuthenticatedSocks5Connect(port int, username, password, host string, targetPort uint16) error {
+	if username == "" || password == "" {
+		return fmt.Errorf("SOCKS username/password are missing")
+	}
 	conn, err := net.DialTimeout("tcp4", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)), 5*time.Second)
 	if err != nil {
 		return err
@@ -706,32 +709,8 @@ func testAuthenticatedSocks5Connect(port int, username, password, host string, t
 	defer conn.Close()
 	_ = conn.SetDeadline(time.Now().Add(10 * time.Second))
 	reader := bufio.NewReader(conn)
-	if _, err := conn.Write([]byte{0x05, 0x01, 0x02}); err != nil {
+	if err := authenticateSOCKS5(conn, username, password); err != nil {
 		return err
-	}
-	greeting := make([]byte, 2)
-	if _, err := io.ReadFull(reader, greeting); err != nil {
-		return err
-	}
-	if greeting[0] != 0x05 || greeting[1] != 0x02 {
-		return fmt.Errorf("SOCKS username/password authentication was not accepted")
-	}
-	if len(username) > 255 || len(password) > 255 {
-		return fmt.Errorf("SOCKS credentials are too long")
-	}
-	auth := []byte{0x01, byte(len(username))}
-	auth = append(auth, username...)
-	auth = append(auth, byte(len(password)))
-	auth = append(auth, password...)
-	if _, err := conn.Write(auth); err != nil {
-		return err
-	}
-	authResponse := make([]byte, 2)
-	if _, err := io.ReadFull(reader, authResponse); err != nil {
-		return err
-	}
-	if authResponse[1] != 0x00 {
-		return fmt.Errorf("SOCKS authentication failed")
 	}
 	hostBytes := []byte(host)
 	request := []byte{0x05, 0x01, 0x00, 0x03, byte(len(hostBytes))}
