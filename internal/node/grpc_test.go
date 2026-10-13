@@ -13,6 +13,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -257,6 +258,20 @@ func TestGRPCServerAcceptsMutualTLSClient(t *testing.T) {
 		metrics.GetMemoryUsed(),
 		metrics.GetMemoryTotal(),
 	)
+
+	if !slices.Contains(hello.GetRuntime().GetCapabilities(), "ip_scope_lookup") {
+		t.Fatalf("hello capabilities %v do not advertise ip_scope_lookup", hello.GetRuntime().GetCapabilities())
+	}
+	usage := nodev1.NewNodeUsageServiceClient(conn)
+	if _, err := usage.CollectUserUsage(ctx, &nodev1.CollectUsageRequest{CollectorId: "legacy-panel"}); err != nil {
+		t.Fatalf("usage request without ip_scope failed: %v", err)
+	}
+	if _, err := usage.CollectUserUsage(ctx, &nodev1.CollectUsageRequest{
+		CollectorId: "scoped-panel",
+		IpScope:     &nodev1.IPLookupScope{Uids: []string{"1"}},
+	}); err != nil {
+		t.Fatalf("usage request with ip_scope failed: %v", err)
+	}
 
 	unauthenticatedCtx, unauthenticatedCancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer unauthenticatedCancel()

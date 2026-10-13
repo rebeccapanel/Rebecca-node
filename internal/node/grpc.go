@@ -511,11 +511,19 @@ func (api *grpcAPI) CollectUserUsage(ctx context.Context, req *nodev1.CollectUsa
 			// offline until the next successful collection.
 			log.Printf("failed to query user traffic stats: %v", statsErr)
 		}
+		var scopedUIDs map[string]struct{}
+		if scope := req.GetIpScope(); scope != nil {
+			scopedUIDs = make(map[string]struct{}, len(scope.GetUids()))
+			for _, uid := range scope.GetUids() {
+				scopedUIDs[uid] = struct{}{}
+			}
+		}
 		var onlineErr error
 		onlineUIDs, onlineIPs, onlineErr = xray.QueryOnlineUserSnapshot(
 			api.server.settings.XrayAPIHost,
 			api.server.settings.XrayAPIPort,
 			5*time.Second,
+			scopedUIDs,
 		)
 		if onlineErr != nil {
 			log.Printf("failed to query online user IPs: %v", onlineErr)
@@ -1217,6 +1225,7 @@ func (s *Server) grpcRuntimeState(message string) *nodev1.RuntimeState {
 			"tor_proxy",
 			"windscribe_proxy",
 			"psiphon_proxy",
+			"ip_scope_lookup",
 		},
 		AppliedRevision:  s.appliedRevision(),
 		ProtocolStatuses: s.protocolStatuses(),

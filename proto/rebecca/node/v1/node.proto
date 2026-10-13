@@ -347,6 +347,11 @@ message TransferMetrics {
 message CollectUsageRequest {
   string collector_id = 1;
   bool reset = 2;
+  IPLookupScope ip_scope = 3;
+}
+
+message IPLookupScope {
+  repeated string uids = 1;
 }
 
 message UserUsageBatch {
