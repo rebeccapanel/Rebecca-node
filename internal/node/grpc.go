@@ -21,6 +21,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
+	_ "google.golang.org/grpc/encoding/gzip"
 	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
 )
@@ -498,6 +499,10 @@ func (api *grpcAPI) ConfigurePsiphon(ctx context.Context, req *nodev1.PsiphonPro
 }
 
 func (api *grpcAPI) CollectUserUsage(ctx context.Context, req *nodev1.CollectUsageRequest) (*nodev1.UserUsageBatch, error) {
+	return api.collectUserUsage(req), nil
+}
+
+func (api *grpcAPI) collectUserUsage(req *nodev1.CollectUsageRequest) *nodev1.UserUsageBatch {
 	var stats []xray.UserStat
 	var speeds []userTrafficSpeed
 	var onlineUIDs []string
@@ -576,7 +581,7 @@ func (api *grpcAPI) CollectUserUsage(ctx context.Context, req *nodev1.CollectUsa
 			InboundTag: stat.InboundTag,
 		})
 	}
-	return res, nil
+	return res
 }
 
 func (api *grpcAPI) CollectOnlineUsers(context.Context, *nodev1.Empty) (*nodev1.OnlineUsersResponse, error) {
@@ -604,6 +609,10 @@ func (api *grpcAPI) AckUserUsage(ctx context.Context, req *nodev1.AckUsageReques
 }
 
 func (api *grpcAPI) CollectOutboundUsage(ctx context.Context, req *nodev1.CollectUsageRequest) (*nodev1.OutboundUsageBatch, error) {
+	return api.collectOutboundUsage(req)
+}
+
+func (api *grpcAPI) collectOutboundUsage(req *nodev1.CollectUsageRequest) (*nodev1.OutboundUsageBatch, error) {
 	var stats []xray.OutboundStat
 	var inboundStats []xray.InboundStat
 	if api.server.core.Started() {
@@ -651,6 +660,34 @@ func (api *grpcAPI) CollectOutboundUsage(ctx context.Context, req *nodev1.Collec
 func (api *grpcAPI) AckOutboundUsage(ctx context.Context, req *nodev1.AckUsageRequest) (*nodev1.AckUsageResponse, error) {
 	acknowledged := api.server.usage.ack(req.GetBatchId())
 	return &nodev1.AckUsageResponse{BatchId: req.GetBatchId(), Acknowledged: acknowledged}, nil
+}
+
+func (api *grpcAPI) CollectAllUsage(ctx context.Context, req *nodev1.CollectAllUsageRequest) (*nodev1.CollectAllUsageResponse, error) {
+	collectReq := &nodev1.CollectUsageRequest{CollectorId: req.GetCollectorId(), Reset_: req.GetReset_(), IpScope: req.GetIpScope()}
+	res := &nodev1.CollectAllUsageResponse{}
+	if !req.GetSkipUsers() {
+		res.Users = api.collectUserUsage(collectReq)
+	}
+	if !req.GetSkipOutbound() {
+		outbound, err := api.collectOutboundUsage(collectReq)
+		if err != nil {
+			res.OutboundError = status.Convert(err).Message()
+		} else {
+			res.Outbound = outbound
+		}
+	}
+	return res, nil
+}
+
+func (api *grpcAPI) AckAllUsage(ctx context.Context, req *nodev1.AckAllUsageRequest) (*nodev1.AckAllUsageResponse, error) {
+	res := &nodev1.AckAllUsageResponse{}
+	if batchID := req.GetUserBatchId(); batchID != "" {
+		res.UsersAcknowledged = api.server.usage.ackUsers(batchID)
+	}
+	if batchID := req.GetOutboundBatchId(); batchID != "" {
+		res.OutboundAcknowledged = api.server.usage.ack(batchID)
+	}
+	return res, nil
 }
 
 func (api *grpcAPI) StreamLogs(req *nodev1.StreamLogsRequest, stream nodev1.NodeLogsService_StreamLogsServer) error {
@@ -1226,6 +1263,8 @@ func (s *Server) grpcRuntimeState(message string) *nodev1.RuntimeState {
 			"windscribe_proxy",
 			"psiphon_proxy",
 			"ip_scope_lookup",
+			"usage_bundle",
+			"grpc_gzip",
 		},
 		AppliedRevision:  s.appliedRevision(),
 		ProtocolStatuses: s.protocolStatuses(),

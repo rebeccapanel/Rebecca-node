@@ -40,6 +40,8 @@ service NodeUsageService {
   rpc AckUserUsage(AckUsageRequest) returns (AckUsageResponse);
   rpc CollectOutboundUsage(CollectUsageRequest) returns (OutboundUsageBatch);
   rpc AckOutboundUsage(AckUsageRequest) returns (AckUsageResponse);
+  rpc CollectAllUsage(CollectAllUsageRequest) returns (CollectAllUsageResponse);
+  rpc AckAllUsage(AckAllUsageRequest) returns (AckAllUsageResponse);
 }
 
 service NodeLogsService {
@@ -409,6 +411,30 @@ message AckUsageRequest {
 message AckUsageResponse {
   string batch_id = 1;
   bool acknowledged = 2;
+}
+
+message CollectAllUsageRequest {
+  string collector_id = 1;
+  bool reset = 2;
+  IPLookupScope ip_scope = 3;
+  bool skip_users = 4;
+  bool skip_outbound = 5;
+}
+
+message CollectAllUsageResponse {
+  UserUsageBatch users = 1;
+  OutboundUsageBatch outbound = 2;
+  string outbound_error = 3;
+}
+
+message AckAllUsageRequest {
+  string user_batch_id = 1;
+  string outbound_batch_id = 2;
+}
+
+message AckAllUsageResponse {
+  bool users_acknowledged = 1;
+  bool outbound_acknowledged = 2;
 }
 
 message StreamLogsRequest {

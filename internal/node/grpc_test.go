@@ -23,6 +23,7 @@ import (
 	"github.com/rebeccapanel/rebecca-node/internal/xray"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/encoding/gzip"
 )
 
 func TestGRPCVPNRuntimeClearsMissingAuxiliaryState(t *testing.T) {
@@ -259,8 +260,10 @@ func TestGRPCServerAcceptsMutualTLSClient(t *testing.T) {
 		metrics.GetMemoryTotal(),
 	)
 
-	if !slices.Contains(hello.GetRuntime().GetCapabilities(), "ip_scope_lookup") {
-		t.Fatalf("hello capabilities %v do not advertise ip_scope_lookup", hello.GetRuntime().GetCapabilities())
+	for _, capability := range []string{"ip_scope_lookup", "usage_bundle", "grpc_gzip"} {
+		if !slices.Contains(hello.GetRuntime().GetCapabilities(), capability) {
+			t.Fatalf("hello capabilities %v do not advertise %s", hello.GetRuntime().GetCapabilities(), capability)
+		}
 	}
 	usage := nodev1.NewNodeUsageServiceClient(conn)
 	if _, err := usage.CollectUserUsage(ctx, &nodev1.CollectUsageRequest{CollectorId: "legacy-panel"}); err != nil {
@@ -271,6 +274,23 @@ func TestGRPCServerAcceptsMutualTLSClient(t *testing.T) {
 		IpScope:     &nodev1.IPLookupScope{Uids: []string{"1"}},
 	}); err != nil {
 		t.Fatalf("usage request with ip_scope failed: %v", err)
+	}
+	bundle, err := usage.CollectAllUsage(ctx, &nodev1.CollectAllUsageRequest{
+		CollectorId: "bundle-panel",
+		IpScope:     &nodev1.IPLookupScope{Uids: []string{"1"}},
+	}, grpc.UseCompressor(gzip.Name))
+	if err != nil {
+		t.Fatalf("compressed collect-all request failed: %v", err)
+	}
+	if bundle.GetOutboundError() != "" && bundle.GetOutbound() != nil {
+		t.Fatalf("collect-all returned both outbound batch and error: %#v", bundle)
+	}
+	ack, err := usage.AckAllUsage(ctx, &nodev1.AckAllUsageRequest{UserBatchId: "unknown", OutboundBatchId: "unknown"})
+	if err != nil {
+		t.Fatalf("ack-all request failed: %v", err)
+	}
+	if ack.GetUsersAcknowledged() || ack.GetOutboundAcknowledged() {
+		t.Fatalf("unknown batches must not be acknowledged: %#v", ack)
 	}
 
 	unauthenticatedCtx, unauthenticatedCancel := context.WithTimeout(context.Background(), 2*time.Second)

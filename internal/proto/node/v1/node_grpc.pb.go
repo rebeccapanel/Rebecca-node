@@ -1064,6 +1064,8 @@ const (
 	NodeUsageService_AckUserUsage_FullMethodName         = "/rebecca.node.v1.NodeUsageService/AckUserUsage"
 	NodeUsageService_CollectOutboundUsage_FullMethodName = "/rebecca.node.v1.NodeUsageService/CollectOutboundUsage"
 	NodeUsageService_AckOutboundUsage_FullMethodName     = "/rebecca.node.v1.NodeUsageService/AckOutboundUsage"
+	NodeUsageService_CollectAllUsage_FullMethodName      = "/rebecca.node.v1.NodeUsageService/CollectAllUsage"
+	NodeUsageService_AckAllUsage_FullMethodName          = "/rebecca.node.v1.NodeUsageService/AckAllUsage"
 )
 
 // NodeUsageServiceClient is the client API for NodeUsageService service.
@@ -1075,6 +1077,8 @@ type NodeUsageServiceClient interface {
 	AckUserUsage(ctx context.Context, in *AckUsageRequest, opts ...grpc.CallOption) (*AckUsageResponse, error)
 	CollectOutboundUsage(ctx context.Context, in *CollectUsageRequest, opts ...grpc.CallOption) (*OutboundUsageBatch, error)
 	AckOutboundUsage(ctx context.Context, in *AckUsageRequest, opts ...grpc.CallOption) (*AckUsageResponse, error)
+	CollectAllUsage(ctx context.Context, in *CollectAllUsageRequest, opts ...grpc.CallOption) (*CollectAllUsageResponse, error)
+	AckAllUsage(ctx context.Context, in *AckAllUsageRequest, opts ...grpc.CallOption) (*AckAllUsageResponse, error)
 }
 
 type nodeUsageServiceClient struct {
@@ -1135,6 +1139,26 @@ func (c *nodeUsageServiceClient) AckOutboundUsage(ctx context.Context, in *AckUs
 	return out, nil
 }
 
+func (c *nodeUsageServiceClient) CollectAllUsage(ctx context.Context, in *CollectAllUsageRequest, opts ...grpc.CallOption) (*CollectAllUsageResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CollectAllUsageResponse)
+	err := c.cc.Invoke(ctx, NodeUsageService_CollectAllUsage_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *nodeUsageServiceClient) AckAllUsage(ctx context.Context, in *AckAllUsageRequest, opts ...grpc.CallOption) (*AckAllUsageResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(AckAllUsageResponse)
+	err := c.cc.Invoke(ctx, NodeUsageService_AckAllUsage_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // NodeUsageServiceServer is the server API for NodeUsageService service.
 // All implementations must embed UnimplementedNodeUsageServiceServer
 // for forward compatibility.
@@ -1144,6 +1168,8 @@ type NodeUsageServiceServer interface {
 	AckUserUsage(context.Context, *AckUsageRequest) (*AckUsageResponse, error)
 	CollectOutboundUsage(context.Context, *CollectUsageRequest) (*OutboundUsageBatch, error)
 	AckOutboundUsage(context.Context, *AckUsageRequest) (*AckUsageResponse, error)
+	CollectAllUsage(context.Context, *CollectAllUsageRequest) (*CollectAllUsageResponse, error)
+	AckAllUsage(context.Context, *AckAllUsageRequest) (*AckAllUsageResponse, error)
 	mustEmbedUnimplementedNodeUsageServiceServer()
 }
 
@@ -1168,6 +1194,12 @@ func (UnimplementedNodeUsageServiceServer) CollectOutboundUsage(context.Context,
 }
 func (UnimplementedNodeUsageServiceServer) AckOutboundUsage(context.Context, *AckUsageRequest) (*AckUsageResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method AckOutboundUsage not implemented")
+}
+func (UnimplementedNodeUsageServiceServer) CollectAllUsage(context.Context, *CollectAllUsageRequest) (*CollectAllUsageResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method CollectAllUsage not implemented")
+}
+func (UnimplementedNodeUsageServiceServer) AckAllUsage(context.Context, *AckAllUsageRequest) (*AckAllUsageResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method AckAllUsage not implemented")
 }
 func (UnimplementedNodeUsageServiceServer) mustEmbedUnimplementedNodeUsageServiceServer() {}
 func (UnimplementedNodeUsageServiceServer) testEmbeddedByValue()                          {}
@@ -1280,6 +1312,42 @@ func _NodeUsageService_AckOutboundUsage_Handler(srv interface{}, ctx context.Con
 	return interceptor(ctx, in, info, handler)
 }
 
+func _NodeUsageService_CollectAllUsage_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CollectAllUsageRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(NodeUsageServiceServer).CollectAllUsage(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: NodeUsageService_CollectAllUsage_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(NodeUsageServiceServer).CollectAllUsage(ctx, req.(*CollectAllUsageRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _NodeUsageService_AckAllUsage_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(AckAllUsageRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(NodeUsageServiceServer).AckAllUsage(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: NodeUsageService_AckAllUsage_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(NodeUsageServiceServer).AckAllUsage(ctx, req.(*AckAllUsageRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // NodeUsageService_ServiceDesc is the grpc.ServiceDesc for NodeUsageService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -1306,6 +1374,14 @@ var NodeUsageService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "AckOutboundUsage",
 			Handler:    _NodeUsageService_AckOutboundUsage_Handler,
+		},
+		{
+			MethodName: "CollectAllUsage",
+			Handler:    _NodeUsageService_CollectAllUsage_Handler,
+		},
+		{
+			MethodName: "AckAllUsage",
+			Handler:    _NodeUsageService_AckAllUsage_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
