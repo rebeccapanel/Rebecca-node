@@ -71,6 +71,8 @@ type Server struct {
 	// call, so the operations do not deadlock on themselves.
 	runtimeMu sync.Mutex
 
+	issueMu sync.Mutex
+
 	userStatsMu sync.Mutex
 	userStatsAt time.Time
 }

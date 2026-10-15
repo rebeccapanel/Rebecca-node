@@ -32,6 +32,7 @@ service NodeRuntimeService {
   rpc ApplyTorProxy(TorProxyRequest) returns (RuntimeActionResponse);
   rpc ConfigureWindscribe(WindscribeProxyRequest) returns (WindscribeProxyResponse);
   rpc ConfigurePsiphon(PsiphonProxyRequest) returns (PsiphonProxyResponse);
+  rpc IssueCertificate(CertificateIssueRequest) returns (CertificateIssueResponse);
 }
 
 service NodeUsageService {
@@ -466,4 +467,14 @@ message XrayMetrics {
   double cpu_usage_percent = 2;
   uint64 memory_used = 3;
   uint64 uptime_seconds = 4;
+}
+
+message CertificateIssueRequest {
+  string identifier = 1;
+  string email = 2;
+}
+
+message CertificateIssueResponse {
+  string fullchain_pem = 1;
+  string private_key_pem = 2;
 }

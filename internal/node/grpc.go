@@ -354,6 +354,17 @@ func (api *grpcAPI) UpdateGeo(ctx context.Context, req *nodev1.GeoUpdateRequest)
 	return api.server.grpcAction(req.GetOperationId(), true, "geo assets updated"), nil
 }
 
+func (api *grpcAPI) IssueCertificate(ctx context.Context, req *nodev1.CertificateIssueRequest) (*nodev1.CertificateIssueResponse, error) {
+	certificatePEM, privateKeyPEM, err := api.server.issueIPCertificate(req.GetIdentifier(), req.GetEmail())
+	if err != nil {
+		return nil, status.Error(codes.FailedPrecondition, err.Error())
+	}
+	return &nodev1.CertificateIssueResponse{
+		FullchainPem:  string(certificatePEM),
+		PrivateKeyPem: string(privateKeyPEM),
+	}, nil
+}
+
 func (api *grpcAPI) RestartService(ctx context.Context, req *nodev1.ServiceRestartRequest) (*nodev1.RuntimeActionResponse, error) {
 	if err := api.server.scheduleNodeCLI("restart", "-n"); err != nil {
 		return nil, status.Error(codes.Internal, err.Error())
