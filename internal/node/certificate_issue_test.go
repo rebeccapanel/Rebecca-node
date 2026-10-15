@@ -5,10 +5,19 @@ import (
 	"testing"
 )
 
-func TestIssueIPCertificateRejectsNonIPIdentifier(t *testing.T) {
+func TestCertificateProfileIsShortLivedOnlyForIPAddresses(t *testing.T) {
+	if got := certificateProfile("203.0.113.10"); got != ipCertificateProfile {
+		t.Fatalf("IP profile = %q, want %q", got, ipCertificateProfile)
+	}
+	if got := certificateProfile("api.example.com"); got != "" {
+		t.Fatalf("domain profile = %q, want the default profile", got)
+	}
+}
+
+func TestIssueCertificateRejectsEmptyIdentifier(t *testing.T) {
 	server := &Server{}
-	if _, _, err := server.issueIPCertificate("example.com", ""); err == nil {
-		t.Fatal("expected a non-IP identifier to be rejected")
+	if _, _, err := server.issueCertificate(" ", ""); err == nil {
+		t.Fatal("expected an empty identifier to be rejected")
 	}
 }
 

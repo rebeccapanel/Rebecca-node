@@ -44,10 +44,10 @@ func (a *acmeAccount) GetPrivateKey() crypto.PrivateKey {
 	return a.key
 }
 
-func (s *Server) issueIPCertificate(identifier, email string) ([]byte, []byte, error) {
-	ip := net.ParseIP(strings.TrimSpace(identifier))
-	if ip == nil {
-		return nil, nil, errors.New("certificate identifier must be an IP address")
+func (s *Server) issueCertificate(identifier, email string) ([]byte, []byte, error) {
+	identifier = strings.TrimSpace(identifier)
+	if identifier == "" {
+		return nil, nil, errors.New("certificate identifier is required")
 	}
 	if !s.issueMu.TryLock() {
 		return nil, nil, errors.New("another certificate issue is already running")
@@ -75,14 +75,21 @@ func (s *Server) issueIPCertificate(identifier, email string) ([]byte, []byte, e
 	}
 	account.registration = registered
 	resource, err := client.Certificate.Obtain(certificate.ObtainRequest{
-		Domains: []string{ip.String()},
-		Profile: ipCertificateProfile,
+		Domains: []string{identifier},
+		Profile: certificateProfile(identifier),
 		Bundle:  true,
 	})
 	if err != nil {
-		return nil, nil, fmt.Errorf("obtain IP certificate for %s with HTTP-01 on port 80: %w", ip, err)
+		return nil, nil, fmt.Errorf("obtain certificate for %s with HTTP-01 on port 80: %w", identifier, err)
 	}
 	return resource.Certificate, resource.PrivateKey, nil
+}
+
+func certificateProfile(identifier string) string {
+	if net.ParseIP(identifier) != nil {
+		return ipCertificateProfile
+	}
+	return ""
 }
 
 func loadOrCreateACMEAccountKey(path string) (*ecdsa.PrivateKey, error) {

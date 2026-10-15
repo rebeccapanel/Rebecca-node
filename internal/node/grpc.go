@@ -355,7 +355,7 @@ func (api *grpcAPI) UpdateGeo(ctx context.Context, req *nodev1.GeoUpdateRequest)
 }
 
 func (api *grpcAPI) IssueCertificate(ctx context.Context, req *nodev1.CertificateIssueRequest) (*nodev1.CertificateIssueResponse, error) {
-	certificatePEM, privateKeyPEM, err := api.server.issueIPCertificate(req.GetIdentifier(), req.GetEmail())
+	certificatePEM, privateKeyPEM, err := api.server.issueCertificate(req.GetIdentifier(), req.GetEmail())
 	if err != nil {
 		return nil, status.Error(codes.FailedPrecondition, err.Error())
 	}
