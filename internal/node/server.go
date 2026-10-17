@@ -71,6 +71,8 @@ type Server struct {
 	// call, so the operations do not deadlock on themselves.
 	runtimeMu sync.Mutex
 
+	issueMu sync.Mutex
+
 	userStatsMu sync.Mutex
 	userStatsAt time.Time
 }
@@ -120,6 +122,7 @@ func New(settings appconfig.Settings) (*Server, error) {
 	if err := server.startCachedConfig(false); err != nil {
 		log.Printf("failed to start cached runtime: %v", err)
 	}
+	go server.runUserSpeedLimitVPNLoop()
 	return server, nil
 }
 
@@ -687,6 +690,9 @@ func (s *Server) startCachedConfig(restart bool) (resultErr error) {
 	s.mu.Lock()
 	s.lastConfig = cfg
 	s.mu.Unlock()
+	if err := s.reconcileUserSpeedLimits(context.Background(), cfg, loadUserSpeedLimitState(s.settings.RebeccaDataDir).Limits); err != nil {
+		log.Printf("user speed limit restore failed: %v", err)
+	}
 	if err := s.applyOpenVPNRuntime(payload.OVRuntime); err != nil {
 		log.Printf("OpenVPN cached runtime apply failed: %v", err)
 	}

@@ -261,14 +261,14 @@ func (m *sshProxyManager) forward(newChannel ssh.NewChannel, uid, tag string, id
 		bytes int64
 	}, 2)
 	go func() {
-		n, _ := io.Copy(server, client)
+		n, _ := io.Copy(userSpeedWriter{Writer: server, uid: sshSpeedUserID(uid), upload: true}, client)
 		counts <- struct {
 			up    bool
 			bytes int64
 		}{true, n}
 	}()
 	go func() {
-		n, _ := io.Copy(client, server)
+		n, _ := io.Copy(userSpeedWriter{Writer: client, uid: sshSpeedUserID(uid), upload: false}, server)
 		counts <- struct {
 			up    bool
 			bytes int64

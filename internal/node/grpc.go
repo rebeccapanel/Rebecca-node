@@ -21,6 +21,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
+	_ "google.golang.org/grpc/encoding/gzip"
 	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
 )
@@ -131,6 +132,15 @@ func (api *grpcAPI) Health(ctx context.Context, req *nodev1.HealthRequest) (*nod
 	return res, nil
 }
 
+func (api *grpcAPI) applyUserSpeedLimits(ctx context.Context, req *nodev1.RuntimeConfigRequest, err error) {
+	if err != nil {
+		return
+	}
+	if speedErr := api.server.syncUserSpeedLimits(ctx, req); speedErr != nil {
+		log.Printf("user speed limit sync failed: %v", speedErr)
+	}
+}
+
 func (api *grpcAPI) StartRuntime(ctx context.Context, req *nodev1.RuntimeConfigRequest) (*nodev1.RuntimeActionResponse, error) {
 	api.server.runtimeMu.Lock()
 	defer api.server.runtimeMu.Unlock()
@@ -148,6 +158,7 @@ func (api *grpcAPI) StartRuntime(ctx context.Context, req *nodev1.RuntimeConfigR
 	} else {
 		response, err = api.server.grpcStartRuntime(ctx, req, false)
 	}
+	api.applyUserSpeedLimits(ctx, req, err)
 	api.server.recordAppliedRevision(req, err)
 	return response, err
 }
@@ -159,6 +170,7 @@ func (api *grpcAPI) RestartRuntime(ctx context.Context, req *nodev1.RuntimeConfi
 		return nil, err
 	}
 	response, err := api.server.grpcRestartRuntime(ctx, req, "runtime restarted")
+	api.applyUserSpeedLimits(ctx, req, err)
 	api.server.recordAppliedRevision(req, err)
 	return response, err
 }
@@ -249,6 +261,7 @@ func (api *grpcAPI) SyncConfig(ctx context.Context, req *nodev1.RuntimeConfigReq
 	} else {
 		response, err = api.server.grpcStartRuntime(ctx, req, true)
 	}
+	api.applyUserSpeedLimits(ctx, req, err)
 	api.server.recordAppliedRevision(req, err)
 	return response, err
 }
@@ -351,6 +364,17 @@ func (api *grpcAPI) UpdateGeo(ctx context.Context, req *nodev1.GeoUpdateRequest)
 		return nil, err
 	}
 	return api.server.grpcAction(req.GetOperationId(), true, "geo assets updated"), nil
+}
+
+func (api *grpcAPI) IssueCertificate(ctx context.Context, req *nodev1.CertificateIssueRequest) (*nodev1.CertificateIssueResponse, error) {
+	certificatePEM, privateKeyPEM, err := api.server.issueCertificate(req.GetIdentifier(), req.GetEmail())
+	if err != nil {
+		return nil, status.Error(codes.FailedPrecondition, err.Error())
+	}
+	return &nodev1.CertificateIssueResponse{
+		FullchainPem:  string(certificatePEM),
+		PrivateKeyPem: string(privateKeyPEM),
+	}, nil
 }
 
 func (api *grpcAPI) RestartService(ctx context.Context, req *nodev1.ServiceRestartRequest) (*nodev1.RuntimeActionResponse, error) {
@@ -498,6 +522,10 @@ func (api *grpcAPI) ConfigurePsiphon(ctx context.Context, req *nodev1.PsiphonPro
 }
 
 func (api *grpcAPI) CollectUserUsage(ctx context.Context, req *nodev1.CollectUsageRequest) (*nodev1.UserUsageBatch, error) {
+	return api.collectUserUsage(req), nil
+}
+
+func (api *grpcAPI) collectUserUsage(req *nodev1.CollectUsageRequest) *nodev1.UserUsageBatch {
 	var stats []xray.UserStat
 	var speeds []userTrafficSpeed
 	var onlineUIDs []string
@@ -511,11 +539,19 @@ func (api *grpcAPI) CollectUserUsage(ctx context.Context, req *nodev1.CollectUsa
 			// offline until the next successful collection.
 			log.Printf("failed to query user traffic stats: %v", statsErr)
 		}
+		var scopedUIDs map[string]struct{}
+		if scope := req.GetIpScope(); scope != nil {
+			scopedUIDs = make(map[string]struct{}, len(scope.GetUids()))
+			for _, uid := range scope.GetUids() {
+				scopedUIDs[uid] = struct{}{}
+			}
+		}
 		var onlineErr error
 		onlineUIDs, onlineIPs, onlineErr = xray.QueryOnlineUserSnapshot(
 			api.server.settings.XrayAPIHost,
 			api.server.settings.XrayAPIPort,
 			5*time.Second,
+			scopedUIDs,
 		)
 		if onlineErr != nil {
 			log.Printf("failed to query online user IPs: %v", onlineErr)
@@ -568,7 +604,7 @@ func (api *grpcAPI) CollectUserUsage(ctx context.Context, req *nodev1.CollectUsa
 			InboundTag: stat.InboundTag,
 		})
 	}
-	return res, nil
+	return res
 }
 
 func (api *grpcAPI) CollectOnlineUsers(context.Context, *nodev1.Empty) (*nodev1.OnlineUsersResponse, error) {
@@ -596,6 +632,10 @@ func (api *grpcAPI) AckUserUsage(ctx context.Context, req *nodev1.AckUsageReques
 }
 
 func (api *grpcAPI) CollectOutboundUsage(ctx context.Context, req *nodev1.CollectUsageRequest) (*nodev1.OutboundUsageBatch, error) {
+	return api.collectOutboundUsage(req)
+}
+
+func (api *grpcAPI) collectOutboundUsage(req *nodev1.CollectUsageRequest) (*nodev1.OutboundUsageBatch, error) {
 	var stats []xray.OutboundStat
 	var inboundStats []xray.InboundStat
 	if api.server.core.Started() {
@@ -643,6 +683,34 @@ func (api *grpcAPI) CollectOutboundUsage(ctx context.Context, req *nodev1.Collec
 func (api *grpcAPI) AckOutboundUsage(ctx context.Context, req *nodev1.AckUsageRequest) (*nodev1.AckUsageResponse, error) {
 	acknowledged := api.server.usage.ack(req.GetBatchId())
 	return &nodev1.AckUsageResponse{BatchId: req.GetBatchId(), Acknowledged: acknowledged}, nil
+}
+
+func (api *grpcAPI) CollectAllUsage(ctx context.Context, req *nodev1.CollectAllUsageRequest) (*nodev1.CollectAllUsageResponse, error) {
+	collectReq := &nodev1.CollectUsageRequest{CollectorId: req.GetCollectorId(), Reset_: req.GetReset_(), IpScope: req.GetIpScope()}
+	res := &nodev1.CollectAllUsageResponse{}
+	if !req.GetSkipUsers() {
+		res.Users = api.collectUserUsage(collectReq)
+	}
+	if !req.GetSkipOutbound() {
+		outbound, err := api.collectOutboundUsage(collectReq)
+		if err != nil {
+			res.OutboundError = status.Convert(err).Message()
+		} else {
+			res.Outbound = outbound
+		}
+	}
+	return res, nil
+}
+
+func (api *grpcAPI) AckAllUsage(ctx context.Context, req *nodev1.AckAllUsageRequest) (*nodev1.AckAllUsageResponse, error) {
+	res := &nodev1.AckAllUsageResponse{}
+	if batchID := req.GetUserBatchId(); batchID != "" {
+		res.UsersAcknowledged = api.server.usage.ackUsers(batchID)
+	}
+	if batchID := req.GetOutboundBatchId(); batchID != "" {
+		res.OutboundAcknowledged = api.server.usage.ack(batchID)
+	}
+	return res, nil
 }
 
 func (api *grpcAPI) StreamLogs(req *nodev1.StreamLogsRequest, stream nodev1.NodeLogsService_StreamLogsServer) error {
@@ -1217,6 +1285,9 @@ func (s *Server) grpcRuntimeState(message string) *nodev1.RuntimeState {
 			"tor_proxy",
 			"windscribe_proxy",
 			"psiphon_proxy",
+			"ip_scope_lookup",
+			"usage_bundle",
+			"grpc_gzip",
 		},
 		AppliedRevision:  s.appliedRevision(),
 		ProtocolStatuses: s.protocolStatuses(),

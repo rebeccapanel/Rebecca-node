@@ -230,7 +230,7 @@ func QueryOnlineUserUIDs(apiHost string, apiPort int, timeout time.Duration) ([]
 	return onlineUserUIDs(res.GetUsers()), nil
 }
 
-func QueryOnlineUserSnapshot(apiHost string, apiPort int, timeout time.Duration) ([]string, []OnlineUserIP, error) {
+func QueryOnlineUserSnapshot(apiHost string, apiPort int, timeout time.Duration, scopedUIDs map[string]struct{}) ([]string, []OnlineUserIP, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
@@ -246,7 +246,7 @@ func QueryOnlineUserSnapshot(apiHost string, apiPort int, timeout time.Duration)
 		return nil, nil, fmt.Errorf("query Xray online users: %w", err)
 	}
 	uids := onlineUserUIDs(res.GetUsers())
-	users, err := queryOnlineUserIPs(ctx, client, res.GetUsers())
+	users, err := queryOnlineUserIPs(ctx, client, res.GetUsers(), scopedUIDs)
 	return uids, users, err
 }
 
@@ -283,7 +283,7 @@ func QueryOnlineUserIPs(apiHost string, apiPort int, timeout time.Duration) ([]O
 	if err != nil {
 		return nil, fmt.Errorf("query Xray online users: %w", err)
 	}
-	return queryOnlineUserIPs(ctx, client, res.GetUsers())
+	return queryOnlineUserIPs(ctx, client, res.GetUsers(), nil)
 }
 
 type onlineIPStatsClient interface {
@@ -298,13 +298,18 @@ type onlineIPTask struct {
 
 const maxOnlineIPLookups = 512
 
-func queryOnlineUserIPs(ctx context.Context, client onlineIPStatsClient, names []string) ([]OnlineUserIP, error) {
+func queryOnlineUserIPs(ctx context.Context, client onlineIPStatsClient, names []string, scopedUIDs map[string]struct{}) ([]OnlineUserIP, error) {
 	tasks := make([]onlineIPTask, 0, len(names))
 	for _, name := range names {
 		statsName := strings.TrimSpace(name)
 		email, uid, ok := parseOnlineUserName(statsName)
 		if !ok {
 			continue
+		}
+		if scopedUIDs != nil {
+			if _, ok := scopedUIDs[uid]; !ok {
+				continue
+			}
 		}
 		if !strings.Contains(statsName, ">>>") {
 			statsName = onlineUserStatsName(email)
@@ -314,7 +319,7 @@ func queryOnlineUserIPs(ctx context.Context, client onlineIPStatsClient, names [
 	if len(tasks) == 0 {
 		return nil, nil
 	}
-	if len(tasks) > maxOnlineIPLookups {
+	if scopedUIDs == nil && len(tasks) > maxOnlineIPLookups {
 		// The UID list is the authoritative online signal. IP lookups are
 		// supplementary and one RPC per user overwhelms Xray on large nodes.
 		tasks = tasks[:maxOnlineIPLookups]

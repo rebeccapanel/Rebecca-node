@@ -2,7 +2,6 @@ package node
 
 import (
 	"encoding/base64"
-	"encoding/json"
 	"errors"
 	"log"
 	"math"
@@ -19,6 +18,7 @@ import (
 type usageBuffer struct {
 	mu                     sync.Mutex
 	spoolPath              string
+	spoolBuf               []byte
 	nextBatch              uint64
 	pending                map[string]xray.OutboundStat
 	inbounds               map[string]xray.InboundStat
@@ -68,8 +68,8 @@ func newPersistentUsageBuffer(spoolPath string) (*usageBuffer, error) {
 		return buffer, nil
 	}
 
-	var state usageBufferSpool
-	if err := json.Unmarshal(data, &state); err != nil {
+	state, err := decodeUsageSpool(data)
+	if err != nil {
 		return nil, err
 	}
 	buffer.nextBatch = state.NextBatch
@@ -108,15 +108,12 @@ func (b *usageBuffer) persistLocked() error {
 		ActiveUserBatch:        b.activeUserBatch,
 		ActiveUserSnapshot:     b.activeUserSnapshot,
 	}
-	payload, err := json.Marshal(state)
-	if err != nil {
-		return err
-	}
+	b.spoolBuf = encodeUsageSpool(state, b.spoolBuf)
 	if err := os.MkdirAll(filepath.Dir(b.spoolPath), 0o700); err != nil {
 		return err
 	}
 	tempPath := b.spoolPath + ".tmp"
-	if err := writeFileSync(tempPath, payload, 0o600); err != nil {
+	if err := writeFileSync(tempPath, b.spoolBuf, 0o600); err != nil {
 		return err
 	}
 	if err := replaceFile(tempPath, b.spoolPath); err != nil {

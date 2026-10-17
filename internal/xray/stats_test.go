@@ -38,7 +38,7 @@ func TestQueryOnlineUserIPsPreservesPartialResults(t *testing.T) {
 	client := &concurrentOnlineIPClient{fail: "2.user"}
 	users, err := queryOnlineUserIPs(context.Background(), client, []string{
 		"user>>>1.user>>>online", "user>>>2.user>>>online", "user>>>3.user>>>online",
-	})
+	}, nil)
 	if err == nil {
 		t.Fatal("expected partial query error")
 	}
@@ -203,7 +203,7 @@ func TestQueryOnlineUserIPsUsesBoundedWorkers(t *testing.T) {
 		names[index] = fmt.Sprintf("user>>>%d.user>>>online", index+1)
 	}
 	client := &concurrentOnlineIPClient{}
-	users, err := queryOnlineUserIPs(context.Background(), client, names)
+	users, err := queryOnlineUserIPs(context.Background(), client, names, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -221,11 +221,46 @@ func TestQueryOnlineUserIPsCapsLargeSnapshots(t *testing.T) {
 		names[index] = fmt.Sprintf("user>>>%d.user>>>online", index+1)
 	}
 	client := &concurrentOnlineIPClient{}
-	users, err := queryOnlineUserIPs(context.Background(), client, names)
+	users, err := queryOnlineUserIPs(context.Background(), client, names, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(users) != maxOnlineIPLookups {
 		t.Fatalf("users=%d want=%d", len(users), maxOnlineIPLookups)
+	}
+}
+
+func TestQueryOnlineUserIPsScopeLookupsOnlyScopedUsersWithoutCap(t *testing.T) {
+	names := make([]string, maxOnlineIPLookups+40)
+	scoped := make(map[string]struct{}, maxOnlineIPLookups+8)
+	for index := range names {
+		uid := fmt.Sprint(index + 1)
+		names[index] = "user>>>" + uid + ".user>>>online"
+		if index < maxOnlineIPLookups+8 {
+			scoped[uid] = struct{}{}
+		}
+	}
+	client := &concurrentOnlineIPClient{}
+	users, err := queryOnlineUserIPs(context.Background(), client, names, scoped)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(users) != len(scoped) {
+		t.Fatalf("users=%d want=%d", len(users), len(scoped))
+	}
+}
+
+func TestQueryOnlineUserIPsEmptyScopeSkipsAllLookups(t *testing.T) {
+	names := []string{"user>>>1.user>>>online", "user>>>2.user>>>online"}
+	client := &concurrentOnlineIPClient{}
+	users, err := queryOnlineUserIPs(context.Background(), client, names, map[string]struct{}{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(users) != 0 {
+		t.Fatalf("users=%d want=0", len(users))
+	}
+	if peak := client.peak.Load(); peak != 0 {
+		t.Fatalf("lookups ran with empty scope, peak=%d", peak)
 	}
 }

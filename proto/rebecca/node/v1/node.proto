@@ -32,6 +32,7 @@ service NodeRuntimeService {
   rpc ApplyTorProxy(TorProxyRequest) returns (RuntimeActionResponse);
   rpc ConfigureWindscribe(WindscribeProxyRequest) returns (WindscribeProxyResponse);
   rpc ConfigurePsiphon(PsiphonProxyRequest) returns (PsiphonProxyResponse);
+  rpc IssueCertificate(CertificateIssueRequest) returns (CertificateIssueResponse);
 }
 
 service NodeUsageService {
@@ -40,6 +41,8 @@ service NodeUsageService {
   rpc AckUserUsage(AckUsageRequest) returns (AckUsageResponse);
   rpc CollectOutboundUsage(CollectUsageRequest) returns (OutboundUsageBatch);
   rpc AckOutboundUsage(AckUsageRequest) returns (AckUsageResponse);
+  rpc CollectAllUsage(CollectAllUsageRequest) returns (CollectAllUsageResponse);
+  rpc AckAllUsage(AckAllUsageRequest) returns (AckAllUsageResponse);
 }
 
 service NodeLogsService {
@@ -95,12 +98,18 @@ message RuntimeState {
   repeated ProtocolStatus protocol_statuses = 10;
 }
 
+message UserSpeedLimit {
+  int64 user_id = 1;
+  int64 speed_limit_kbps = 2;
+}
+
 message RuntimeConfigRequest {
   string operation_id = 1;
   string config_json = 2;
   bool include_db_users = 3;
   string ov_runtime_json = 4;
   uint64 desired_revision = 5;
+  repeated UserSpeedLimit user_speed_limits = 6;
 }
 
 message StopRuntimeRequest {
@@ -347,6 +356,11 @@ message TransferMetrics {
 message CollectUsageRequest {
   string collector_id = 1;
   bool reset = 2;
+  IPLookupScope ip_scope = 3;
+}
+
+message IPLookupScope {
+  repeated string uids = 1;
 }
 
 message UserUsageBatch {
@@ -406,6 +420,30 @@ message AckUsageResponse {
   bool acknowledged = 2;
 }
 
+message CollectAllUsageRequest {
+  string collector_id = 1;
+  bool reset = 2;
+  IPLookupScope ip_scope = 3;
+  bool skip_users = 4;
+  bool skip_outbound = 5;
+}
+
+message CollectAllUsageResponse {
+  UserUsageBatch users = 1;
+  OutboundUsageBatch outbound = 2;
+  string outbound_error = 3;
+}
+
+message AckAllUsageRequest {
+  string user_batch_id = 1;
+  string outbound_batch_id = 2;
+}
+
+message AckAllUsageResponse {
+  bool users_acknowledged = 1;
+  bool outbound_acknowledged = 2;
+}
+
 message StreamLogsRequest {
   string stream_id = 1;
   uint32 max_lines = 2;
@@ -435,4 +473,14 @@ message XrayMetrics {
   double cpu_usage_percent = 2;
   uint64 memory_used = 3;
   uint64 uptime_seconds = 4;
+}
+
+message CertificateIssueRequest {
+  string identifier = 1;
+  string email = 2;
+}
+
+message CertificateIssueResponse {
+  string fullchain_pem = 1;
+  string private_key_pem = 2;
 }
