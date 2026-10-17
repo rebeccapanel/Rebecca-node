@@ -689,6 +689,9 @@ func (s *Server) startCachedConfig(restart bool) (resultErr error) {
 	s.mu.Lock()
 	s.lastConfig = cfg
 	s.mu.Unlock()
+	if err := s.reconcileUserSpeedLimits(context.Background(), cfg, loadUserSpeedLimitState(s.settings.RebeccaDataDir).Limits); err != nil {
+		log.Printf("user speed limit restore failed: %v", err)
+	}
 	if err := s.applyOpenVPNRuntime(payload.OVRuntime); err != nil {
 		log.Printf("OpenVPN cached runtime apply failed: %v", err)
 	}

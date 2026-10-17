@@ -132,6 +132,15 @@ func (api *grpcAPI) Health(ctx context.Context, req *nodev1.HealthRequest) (*nod
 	return res, nil
 }
 
+func (api *grpcAPI) applyUserSpeedLimits(ctx context.Context, req *nodev1.RuntimeConfigRequest, err error) {
+	if err != nil {
+		return
+	}
+	if speedErr := api.server.syncUserSpeedLimits(ctx, req); speedErr != nil {
+		log.Printf("user speed limit sync failed: %v", speedErr)
+	}
+}
+
 func (api *grpcAPI) StartRuntime(ctx context.Context, req *nodev1.RuntimeConfigRequest) (*nodev1.RuntimeActionResponse, error) {
 	api.server.runtimeMu.Lock()
 	defer api.server.runtimeMu.Unlock()
@@ -149,6 +158,7 @@ func (api *grpcAPI) StartRuntime(ctx context.Context, req *nodev1.RuntimeConfigR
 	} else {
 		response, err = api.server.grpcStartRuntime(ctx, req, false)
 	}
+	api.applyUserSpeedLimits(ctx, req, err)
 	api.server.recordAppliedRevision(req, err)
 	return response, err
 }
@@ -160,6 +170,7 @@ func (api *grpcAPI) RestartRuntime(ctx context.Context, req *nodev1.RuntimeConfi
 		return nil, err
 	}
 	response, err := api.server.grpcRestartRuntime(ctx, req, "runtime restarted")
+	api.applyUserSpeedLimits(ctx, req, err)
 	api.server.recordAppliedRevision(req, err)
 	return response, err
 }
@@ -250,6 +261,7 @@ func (api *grpcAPI) SyncConfig(ctx context.Context, req *nodev1.RuntimeConfigReq
 	} else {
 		response, err = api.server.grpcStartRuntime(ctx, req, true)
 	}
+	api.applyUserSpeedLimits(ctx, req, err)
 	api.server.recordAppliedRevision(req, err)
 	return response, err
 }

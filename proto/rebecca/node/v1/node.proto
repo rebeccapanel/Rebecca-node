@@ -98,12 +98,18 @@ message RuntimeState {
   repeated ProtocolStatus protocol_statuses = 10;
 }
 
+message UserSpeedLimit {
+  int64 user_id = 1;
+  int64 speed_limit_kbps = 2;
+}
+
 message RuntimeConfigRequest {
   string operation_id = 1;
   string config_json = 2;
   bool include_db_users = 3;
   string ov_runtime_json = 4;
   uint64 desired_revision = 5;
+  repeated UserSpeedLimit user_speed_limits = 6;
 }
 
 message StopRuntimeRequest {
