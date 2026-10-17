@@ -122,6 +122,7 @@ func New(settings appconfig.Settings) (*Server, error) {
 	if err := server.startCachedConfig(false); err != nil {
 		log.Printf("failed to start cached runtime: %v", err)
 	}
+	go server.runUserSpeedLimitVPNLoop()
 	return server, nil
 }
 

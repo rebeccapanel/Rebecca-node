@@ -3,6 +3,9 @@ package node
 import (
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -47,7 +50,7 @@ func findUserSpeedLimitRule(rules []any, match func(map[string]any) bool) int {
 
 func TestBuildUserSpeedLimitPlanKeepsBaseRoutingAndLimitsSpecificRoutes(t *testing.T) {
 	doc := parseUserSpeedLimitTestDoc(t, userSpeedLimitTestDoc)
-	plan, err := buildUserSpeedLimitPlan(doc, []userSpeedLimit{{UserID: 129939, SpeedLimitKbps: 10000}})
+	plan, err := buildUserSpeedLimitPlan(doc, []userSpeedLimit{{UserID: 129939, SpeedLimitKbps: 10000}}, nil)
 	if err != nil {
 		t.Fatalf("build plan: %v", err)
 	}
@@ -121,7 +124,7 @@ func TestBuildUserSpeedLimitPlanKeepsBaseRoutingAndLimitsSpecificRoutes(t *testi
 
 func TestUserSpeedLimitNFTScriptLimitsOnlyMarkedUsers(t *testing.T) {
 	doc := parseUserSpeedLimitTestDoc(t, userSpeedLimitTestDoc)
-	plan, err := buildUserSpeedLimitPlan(doc, []userSpeedLimit{{UserID: 129939, SpeedLimitKbps: 10000}})
+	plan, err := buildUserSpeedLimitPlan(doc, []userSpeedLimit{{UserID: 129939, SpeedLimitKbps: 10000}}, nil)
 	if err != nil {
 		t.Fatalf("build plan: %v", err)
 	}
@@ -139,7 +142,7 @@ func TestUserSpeedLimitNFTScriptLimitsOnlyMarkedUsers(t *testing.T) {
 			t.Fatalf("nft script misses %q:\n%s", want, script)
 		}
 	}
-	empty := userSpeedLimitNFTScript(nil)
+	empty := userSpeedLimitNFTScript(nil, nil, nil)
 	if empty != "add table inet rebecca_user_speed\ndelete table inet rebecca_user_speed\n" {
 		t.Fatalf("empty script must only reset the table, got %q", empty)
 	}
@@ -156,11 +159,11 @@ func TestUserSpeedLimitMarkStaysInDedicatedRange(t *testing.T) {
 
 func TestUserSpeedLimitBaseHashFollowsRoutingChanges(t *testing.T) {
 	doc := parseUserSpeedLimitTestDoc(t, userSpeedLimitTestDoc)
-	first, err := buildUserSpeedLimitPlan(doc, nil)
+	first, err := buildUserSpeedLimitPlan(doc, nil, nil)
 	if err != nil {
 		t.Fatalf("build plan: %v", err)
 	}
-	again, err := buildUserSpeedLimitPlan(parseUserSpeedLimitTestDoc(t, userSpeedLimitTestDoc), nil)
+	again, err := buildUserSpeedLimitPlan(parseUserSpeedLimitTestDoc(t, userSpeedLimitTestDoc), nil, nil)
 	if err != nil {
 		t.Fatalf("build plan: %v", err)
 	}
@@ -168,11 +171,53 @@ func TestUserSpeedLimitBaseHashFollowsRoutingChanges(t *testing.T) {
 		t.Fatalf("base hash must be stable for the same config")
 	}
 	changed := strings.Replace(userSpeedLimitTestDoc, `"outboundTag": "direct"}`, `"outboundTag": "blocked"}`, 1)
-	changedPlan, err := buildUserSpeedLimitPlan(parseUserSpeedLimitTestDoc(t, changed), nil)
+	changedPlan, err := buildUserSpeedLimitPlan(parseUserSpeedLimitTestDoc(t, changed), nil, nil)
 	if err != nil {
 		t.Fatalf("build changed plan: %v", err)
 	}
 	if first.BaseHash == changedPlan.BaseHash {
 		t.Fatalf("base hash must change when routing changes")
+	}
+}
+
+func TestUserSpeedLimitVPNBindingsMapsAssignedIPsOfLimitedUsers(t *testing.T) {
+	dir := t.TempDir()
+	content := strings.Join([]string{
+		"129939\topenvpn\tovpn-main\tsession-a\t10.66.0.2\t203.0.113.7\t1700000000\t1194",
+		"129939\twireguard\twg0\tsession-b\t10.69.0.3\t\t1700000000",
+		"129940\twireguard\twg0\tsession-c\t10.69.0.4\t\t1700000000",
+		"129939\tl2tp\tl2tp-main\tsession-d\tnot-an-ip\t\t1700000000",
+		"129939\tl2tp\tl2tp-main\tsession-e\t2001:db8::1\t\t1700000000",
+		"129939\tanyconnect\tac\tsession-f\t10.71.0.9",
+		"short\tline",
+		"",
+	}, "\n")
+	if err := os.WriteFile(filepath.Join(dir, "vpn-sessions.tsv"), []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	bindings := userSpeedLimitVPNBindings(dir, []userSpeedLimit{{UserID: 129939, SpeedLimitKbps: 5000}, {UserID: 129940, SpeedLimitKbps: 0}})
+	want := []userSpeedLimitBinding{{IP: "10.66.0.2", UserID: 129939}, {IP: "10.69.0.3", UserID: 129939}, {IP: "10.71.0.9", UserID: 129939}}
+	if !reflect.DeepEqual(bindings, want) {
+		t.Fatalf("bindings = %v, want %v", bindings, want)
+	}
+}
+
+func TestUserSpeedLimitNFTScriptIncludesVPNOnlyUsers(t *testing.T) {
+	limits := []userSpeedLimit{{UserID: 42, SpeedLimitKbps: 5000}}
+	bindings := []userSpeedLimitBinding{{IP: "10.69.0.9", UserID: 42}}
+	script := userSpeedLimitNFTScript(nil, limits, bindings)
+	for _, want := range []string{
+		"chain lim_in_42 { limit rate over 625000 bytes/second burst 156250 bytes drop; }",
+		"chain lim_out_42 { limit rate over 625000 bytes/second burst 156250 bytes drop; }",
+		"map vpn_up { type ipv4_addr : verdict; elements = { 10.69.0.9 : jump lim_out_42 }; }",
+		"map vpn_down { type ipv4_addr : verdict; elements = { 10.69.0.9 : jump lim_in_42 }; }",
+		"chain vpn_pre { type filter hook prerouting priority 0; policy accept; ip saddr vmap @vpn_up; }",
+		"chain vpn_fwd { type filter hook forward priority 0; policy accept; ip daddr vmap @vpn_down; }",
+		"chain vpn_out { type filter hook output priority 0; policy accept; ip daddr vmap @vpn_down; }",
+		"map in_limits { type mark : verdict; }",
+	} {
+		if !strings.Contains(script, want) {
+			t.Fatalf("nft script misses %q:\n%s", want, script)
+		}
 	}
 }

@@ -243,7 +243,7 @@ func userSpeedLimitBaseHash(routing map[string]any, outbounds []any) (string, er
 	return hex.EncodeToString(sum[:]), nil
 }
 
-func buildUserSpeedLimitPlan(doc map[string]any, limits []userSpeedLimit) (*userSpeedLimitPlan, error) {
+func buildUserSpeedLimitPlan(doc map[string]any, limits []userSpeedLimit, bindings []userSpeedLimitBinding) (*userSpeedLimitPlan, error) {
 	routing, _ := doc["routing"].(map[string]any)
 	baseRules, _ := routing["rules"].([]any)
 	balancers, _ := routing["balancers"].([]any)
@@ -269,7 +269,7 @@ func buildUserSpeedLimitPlan(doc map[string]any, limits []userSpeedLimit) (*user
 	defaultCloneable := defaultTag != "" && defaultTag != "API" && byTag[defaultTag] != nil && userSpeedLimitProtocol(byTag[defaultTag]) != "blackhole"
 	if len(active) == 0 {
 		plan.Overlay = baseRules
-		plan.NFTScript = userSpeedLimitNFTScript(nil)
+		plan.NFTScript = userSpeedLimitNFTScript(nil, limits, bindings)
 		return plan, nil
 	}
 	for _, user := range active {
@@ -326,37 +326,53 @@ func buildUserSpeedLimitPlan(doc map[string]any, limits []userSpeedLimit) (*user
 		}
 	}
 	plan.Overlay = overlay
-	plan.NFTScript = userSpeedLimitNFTScript(active)
+	plan.NFTScript = userSpeedLimitNFTScript(active, limits, bindings)
 	return plan, nil
 }
 
-func userSpeedLimitNFTScript(active []userSpeedLimitActive) string {
+func userSpeedLimitNFTScript(active []userSpeedLimitActive, limited []userSpeedLimit, bindings []userSpeedLimitBinding) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "add table inet %s\n", userSpeedLimitTable)
 	fmt.Fprintf(&b, "delete table inet %s\n", userSpeedLimitTable)
-	if len(active) == 0 {
+	if len(limited) == 0 {
 		return b.String()
 	}
 	fmt.Fprintf(&b, "table inet %s {\n", userSpeedLimitTable)
 	fmt.Fprintf(&b, "  chain premark { type filter hook prerouting priority -150; policy accept; ct mark and 0x%08x == 0x%08x meta mark set ct mark; }\n", userSpeedLimitMarkMask, userSpeedLimitMarkBase)
 	fmt.Fprintf(&b, "  chain outmark { type route hook output priority -150; policy accept; meta mark and 0x%08x == 0x%08x ct mark set meta mark; }\n", userSpeedLimitMarkMask, userSpeedLimitMarkBase)
+	for _, user := range limited {
+		rate := userSpeedLimitRateBytes(user.SpeedLimitKbps)
+		burst := userSpeedLimitBurstBytes(rate)
+		fmt.Fprintf(&b, "  chain lim_in_%d { limit rate over %d bytes/second burst %d bytes drop; }\n", user.UserID, rate, burst)
+		fmt.Fprintf(&b, "  chain lim_out_%d { limit rate over %d bytes/second burst %d bytes drop; }\n", user.UserID, rate, burst)
+	}
 	inElements := make([]string, 0, len(active))
 	outElements := make([]string, 0, len(active))
 	for _, user := range active {
-		rate := userSpeedLimitRateBytes(user.SpeedLimitKbps)
-		burst := userSpeedLimitBurstBytes(rate)
 		mark := userSpeedLimitMark(user.UserID)
-		fmt.Fprintf(&b, "  chain lim_in_%d { limit rate over %d bytes/second burst %d bytes drop; }\n", user.UserID, rate, burst)
-		fmt.Fprintf(&b, "  chain lim_out_%d { limit rate over %d bytes/second burst %d bytes drop; }\n", user.UserID, rate, burst)
 		inElements = append(inElements, fmt.Sprintf("0x%08x : jump lim_in_%d", mark, user.UserID))
 		outElements = append(outElements, fmt.Sprintf("0x%08x : jump lim_out_%d", mark, user.UserID))
 	}
-	fmt.Fprintf(&b, "  map in_limits { type mark : verdict; elements = { %s }; }\n", strings.Join(inElements, ", "))
-	fmt.Fprintf(&b, "  map out_limits { type mark : verdict; elements = { %s }; }\n", strings.Join(outElements, ", "))
+	writeUserSpeedLimitMap(&b, "in_limits", "mark", inElements)
+	writeUserSpeedLimitMap(&b, "out_limits", "mark", outElements)
 	fmt.Fprintf(&b, "  chain in_limit { type filter hook input priority 0; policy accept; meta mark vmap @in_limits; }\n")
 	fmt.Fprintf(&b, "  chain out_limit { type filter hook output priority 0; policy accept; meta mark vmap @out_limits; }\n")
+	upElements, downElements := userSpeedLimitVPNElements(bindings)
+	writeUserSpeedLimitMap(&b, "vpn_up", "ipv4_addr", upElements)
+	writeUserSpeedLimitMap(&b, "vpn_down", "ipv4_addr", downElements)
+	fmt.Fprintf(&b, "  chain vpn_pre { type filter hook prerouting priority 0; policy accept; ip saddr vmap @vpn_up; }\n")
+	fmt.Fprintf(&b, "  chain vpn_fwd { type filter hook forward priority 0; policy accept; ip daddr vmap @vpn_down; }\n")
+	fmt.Fprintf(&b, "  chain vpn_out { type filter hook output priority 0; policy accept; ip daddr vmap @vpn_down; }\n")
 	b.WriteString("}\n")
 	return b.String()
+}
+
+func writeUserSpeedLimitMap(b *strings.Builder, name string, keyType string, elements []string) {
+	if len(elements) == 0 {
+		fmt.Fprintf(b, "  map %s { type %s : verdict; }\n", name, keyType)
+		return
+	}
+	fmt.Fprintf(b, "  map %s { type %s : verdict; elements = { %s }; }\n", name, keyType, strings.Join(elements, ", "))
 }
 
 func userSpeedLimitRunXray(ctx context.Context, exe string, args []string, stdin []byte) error {
@@ -503,14 +519,26 @@ func saveUserSpeedLimitState(dataDir string, state userSpeedLimitState) error {
 }
 
 func (s *Server) reconcileUserSpeedLimits(ctx context.Context, cfg *xray.Config, limits []userSpeedLimit) error {
-	if cfg == nil || !s.core.Started() {
-		return nil
-	}
 	userSpeedLimitMu.Lock()
 	defer userSpeedLimitMu.Unlock()
+	setUserSpeedLimitIndex(limits)
 	dataDir := s.settings.RebeccaDataDir
 	state := loadUserSpeedLimitState(dataDir)
 	if len(limits) == 0 && len(state.Limits) == 0 {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(ctx, userSpeedLimitApplyTimeout)
+	defer cancel()
+	bindings := userSpeedLimitVPNBindings(dataDir, limits)
+	state.Limits = limits
+	if err := saveUserSpeedLimitState(dataDir, state); err != nil {
+		return err
+	}
+	if cfg == nil || !s.core.Started() {
+		if err := applyUserSpeedLimitNFT(ctx, userSpeedLimitNFTScript(nil, limits, bindings)); err != nil {
+			return err
+		}
+		userSpeedLimitVPNKey = userSpeedLimitBindingsKey(bindings)
 		return nil
 	}
 	raw, err := cfg.JSON()
@@ -521,16 +549,10 @@ func (s *Server) reconcileUserSpeedLimits(ctx context.Context, cfg *xray.Config,
 	if err := json.Unmarshal(raw, &doc); err != nil {
 		return err
 	}
-	plan, err := buildUserSpeedLimitPlan(doc, limits)
+	plan, err := buildUserSpeedLimitPlan(doc, limits, bindings)
 	if err != nil {
 		return err
 	}
-	state.Limits = limits
-	if err := saveUserSpeedLimitState(dataDir, state); err != nil {
-		return err
-	}
-	ctx, cancel := context.WithTimeout(ctx, userSpeedLimitApplyTimeout)
-	defer cancel()
 	exe := s.core.ExecutablePath()
 	addr := fmt.Sprintf("127.0.0.1:%d", s.settings.XrayAPIPort)
 	if err := applyUserSpeedLimitRuntime(ctx, exe, addr, plan, state.BaseHash != plan.BaseHash); err != nil {
@@ -539,6 +561,7 @@ func (s *Server) reconcileUserSpeedLimits(ctx context.Context, cfg *xray.Config,
 	if err := applyUserSpeedLimitNFT(ctx, plan.NFTScript); err != nil {
 		return err
 	}
+	userSpeedLimitVPNKey = userSpeedLimitBindingsKey(bindings)
 	state.BaseHash = plan.BaseHash
 	return saveUserSpeedLimitState(dataDir, state)
 }
