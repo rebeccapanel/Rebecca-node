@@ -29,6 +29,10 @@ func (c *Config) JSON() ([]byte, error) {
 	return json.Marshal(c.data)
 }
 
+func (c *Config) Document() map[string]any {
+	return c.data
+}
+
 func (c *Config) InboundCount() int {
 	inbounds, _ := c.data["inbounds"].([]any)
 	count := 0

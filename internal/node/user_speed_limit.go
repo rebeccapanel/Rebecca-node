@@ -35,6 +35,10 @@ const userSpeedLimitApplyTimeout = 60 * time.Second
 
 var userSpeedLimitMu sync.Mutex
 
+var userSpeedLimitAppliedPID int
+
+var userSpeedLimitAppliedKey string
+
 var userSpeedLimitCloneTagPattern = regexp.MustCompile("^" + userSpeedLimitTagPrefix + `[0-9]+-`)
 
 type userSpeedLimit struct {
@@ -55,6 +59,7 @@ type userSpeedLimitPlan struct {
 	CloneTags map[string]bool
 	Overlay   []any
 	NFTScript string
+	Active    []userSpeedLimitActive
 }
 
 type userSpeedLimitActive struct {
@@ -243,6 +248,20 @@ func userSpeedLimitBaseHash(routing map[string]any, outbounds []any) (string, er
 	return hex.EncodeToString(sum[:]), nil
 }
 
+func userSpeedLimitPlanKey(plan *userSpeedLimitPlan, limits []userSpeedLimit) string {
+	sorted := append([]userSpeedLimit(nil), limits...)
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i].UserID < sorted[j].UserID })
+	h := sha256.New()
+	fmt.Fprintf(h, "base %s\n", plan.BaseHash)
+	for _, limit := range sorted {
+		fmt.Fprintf(h, "limit %d %d\n", limit.UserID, limit.SpeedLimitKbps)
+	}
+	for _, user := range plan.Active {
+		fmt.Fprintf(h, "active %d %d %s\n", user.UserID, user.SpeedLimitKbps, strings.Join(user.emails, "\x00"))
+	}
+	return hex.EncodeToString(h.Sum(nil))
+}
+
 func buildUserSpeedLimitPlan(doc map[string]any, limits []userSpeedLimit, bindings []userSpeedLimitBinding) (*userSpeedLimitPlan, error) {
 	routing, _ := doc["routing"].(map[string]any)
 	baseRules, _ := routing["rules"].([]any)
@@ -261,6 +280,7 @@ func buildUserSpeedLimitPlan(doc map[string]any, limits []userSpeedLimit, bindin
 	}
 	plan := &userSpeedLimitPlan{BaseHash: hash, BaseRules: baseRules, Balancers: balancers, CloneTags: map[string]bool{}}
 	active := userSpeedLimitActiveUsers(limits, userSpeedLimitEmailsByID(doc))
+	plan.Active = active
 	defaultTag := ""
 	if len(outbounds) > 0 {
 		first, _ := outbounds[0].(map[string]any)
@@ -535,24 +555,23 @@ func (s *Server) reconcileUserSpeedLimits(ctx context.Context, cfg *xray.Config,
 		return err
 	}
 	if cfg == nil || !s.core.Started() {
+		userSpeedLimitAppliedKey = ""
 		if err := applyUserSpeedLimitNFT(ctx, userSpeedLimitNFTScript(nil, limits, bindings)); err != nil {
 			return err
 		}
 		userSpeedLimitVPNKey = userSpeedLimitBindingsKey(bindings)
 		return nil
 	}
-	raw, err := cfg.JSON()
+	plan, err := buildUserSpeedLimitPlan(cfg.Document(), limits, bindings)
 	if err != nil {
 		return err
 	}
-	var doc map[string]any
-	if err := json.Unmarshal(raw, &doc); err != nil {
-		return err
+	pid, _ := s.core.Process()
+	key := userSpeedLimitPlanKey(plan, limits)
+	if pid != 0 && pid == userSpeedLimitAppliedPID && key == userSpeedLimitAppliedKey {
+		return nil
 	}
-	plan, err := buildUserSpeedLimitPlan(doc, limits, bindings)
-	if err != nil {
-		return err
-	}
+	userSpeedLimitAppliedKey = ""
 	exe := s.core.ExecutablePath()
 	addr := fmt.Sprintf("127.0.0.1:%d", s.settings.XrayAPIPort)
 	if err := applyUserSpeedLimitRuntime(ctx, exe, addr, plan, state.BaseHash != plan.BaseHash); err != nil {
@@ -562,6 +581,8 @@ func (s *Server) reconcileUserSpeedLimits(ctx context.Context, cfg *xray.Config,
 		return err
 	}
 	userSpeedLimitVPNKey = userSpeedLimitBindingsKey(bindings)
+	userSpeedLimitAppliedPID = pid
+	userSpeedLimitAppliedKey = key
 	state.BaseHash = plan.BaseHash
 	return saveUserSpeedLimitState(dataDir, state)
 }
