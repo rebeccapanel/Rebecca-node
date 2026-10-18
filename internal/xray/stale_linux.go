@@ -34,6 +34,7 @@ func cleanupStaleManagedProcesses(executable string) {
 		if err != nil {
 			continue
 		}
+		exe = staleProcessExecutable(exe)
 		if resolved, err := filepath.EvalSymlinks(exe); err == nil {
 			exe = resolved
 		}
@@ -51,6 +52,10 @@ func cleanupStaleManagedProcesses(executable string) {
 			_ = syscall.Kill(pid, syscall.SIGKILL)
 		}
 	}
+}
+
+func staleProcessExecutable(link string) string {
+	return strings.TrimSuffix(link, " (deleted)")
 }
 
 func procPPID(pid int) int {
