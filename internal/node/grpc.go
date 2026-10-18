@@ -255,6 +255,8 @@ func (api *grpcAPI) SyncConfig(ctx context.Context, req *nodev1.RuntimeConfigReq
 	if api.server.core.Started() {
 		if api.server.runtimeConfigMatchesCache(req.GetConfigJson()) || api.server.runtimeTopologyMatchesCache(req.GetConfigJson()) {
 			response, err = api.server.grpcApplyRuntimeOnly(ctx, req, "runtime config synced")
+		} else if api.server.applyRuntimeTopologyDelta(ctx, req.GetConfigJson()) {
+			response, err = api.server.grpcApplyRuntimeOnly(ctx, req, "runtime topology synced")
 		} else {
 			response, err = api.server.grpcRestartRuntime(ctx, req, "runtime config synced")
 		}
