@@ -32,25 +32,12 @@ type l2tpRuntime struct {
 }
 
 type l2tpRuntimeInbound struct {
-	Tag        string            `json:"tag"`
-	TunnelTag  string            `json:"tunnel_tag"`
-	Port       int               `json:"port"`
-	TunnelPort int               `json:"tunnel_port"`
-	Settings   map[string]any    `json:"settings"`
-	Users      []l2tpRuntimeUser `json:"users"`
-}
-
-type l2tpRuntimeUser struct {
-	UserID      int64  `json:"user_id"`
-	Username    string `json:"username"`
-	VPNUsername string `json:"vpn_username"`
-	Password    string `json:"password"`
-	IPv4Address string `json:"ipv4_address"`
-	Status      string `json:"status"`
-	UsedTraffic int64  `json:"used_traffic"`
-	DataLimit   *int64 `json:"data_limit,omitempty"`
-	Expire      *int64 `json:"expire,omitempty"`
-	DeviceLimit int64  `json:"device_limit,omitempty"`
+	Tag        string           `json:"tag"`
+	TunnelTag  string           `json:"tunnel_tag"`
+	Port       int              `json:"port"`
+	TunnelPort int              `json:"tunnel_port"`
+	Settings   map[string]any   `json:"settings"`
+	Users      []vpnRuntimeUser `json:"users"`
 }
 
 type l2tpManager struct {
@@ -175,7 +162,7 @@ func (m *l2tpManager) writeInbound(inbound l2tpRuntimeInbound, callback *vpnSess
 		return err
 	}
 	usersPath := filepath.Join(m.baseDir, "users.tsv")
-	if err := os.WriteFile(usersPath, []byte(l2tpUsersTSV(inbound.Users)), 0o600); err != nil {
+	if err := os.WriteFile(usersPath, []byte(vpnUsersTSV(inbound.Users)), 0o600); err != nil {
 		return err
 	}
 	if err := os.WriteFile(filepath.Join(m.baseDir, "nftables.nft"), []byte(l2tpNFTScript(inbound)), 0o600); err != nil {
@@ -435,7 +422,7 @@ func boundedInt(value any, fallback int, min int, max int) int {
 	return parsed
 }
 
-func l2tpChapSecrets(users []l2tpRuntimeUser) string {
+func l2tpChapSecrets(users []vpnRuntimeUser) string {
 	var b strings.Builder
 	now := time.Now().Unix()
 	for _, user := range users {
@@ -447,35 +434,7 @@ func l2tpChapSecrets(users []l2tpRuntimeUser) string {
 	return b.String()
 }
 
-func l2tpUsersTSV(users []l2tpRuntimeUser) string {
-	var b strings.Builder
-	for _, user := range users {
-		limit := ""
-		if user.DataLimit != nil {
-			limit = strconv.FormatInt(*user.DataLimit, 10)
-		}
-		expire := ""
-		if user.Expire != nil {
-			expire = strconv.FormatInt(*user.Expire, 10)
-		}
-		fields := []string{
-			strconv.FormatInt(user.UserID, 10),
-			user.VPNUsername,
-			user.Password,
-			user.IPv4Address,
-			strconv.FormatInt(user.UsedTraffic, 10),
-			limit,
-			user.Status,
-			expire,
-			strconv.FormatInt(user.DeviceLimit, 10),
-		}
-		b.WriteString(strings.Join(fields, "\t"))
-		b.WriteByte('\n')
-	}
-	return b.String()
-}
-
-func l2tpUsersFingerprint(users []l2tpRuntimeUser) string {
+func l2tpUsersFingerprint(users []vpnRuntimeUser) string {
 	var b strings.Builder
 	for _, user := range users {
 		b.WriteString(strconv.FormatInt(user.UserID, 10))
@@ -546,7 +505,7 @@ func normalizeL2TPRuntimeInbound(inbound l2tpRuntimeInbound) l2tpRuntimeInbound 
 	return inbound
 }
 
-func (m *l2tpManager) disconnectStaleSessions(users []l2tpRuntimeUser) {
+func (m *l2tpManager) disconnectStaleSessions(users []vpnRuntimeUser) {
 	if runtime.GOOS == "windows" {
 		return
 	}

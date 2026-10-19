@@ -79,7 +79,7 @@ func TestL2TPLibreswanConfigSupportsNATClients(t *testing.T) {
 
 func TestL2TPChapSecretsExcludeExpiredAndLimitedUsers(t *testing.T) {
 	limit, expired := int64(100), time.Now().Unix()-1
-	secrets := l2tpChapSecrets([]l2tpRuntimeUser{
+	secrets := l2tpChapSecrets([]vpnRuntimeUser{
 		{VPNUsername: "allowed", Password: "secret", Status: "active", UsedTraffic: 99, DataLimit: &limit, IPv4Address: "10.67.0.10"},
 		{VPNUsername: "limited", Password: "secret", Status: "active", UsedTraffic: 100, DataLimit: &limit, IPv4Address: "10.67.0.11"},
 		{VPNUsername: "expired", Password: "secret", Status: "active", Expire: &expired, IPv4Address: "10.67.0.12"},

@@ -61,7 +61,7 @@ func vpnRemoveDirectNAT(tag string) error {
 			if lineText == "" || !strings.Contains(lineText, comment) {
 				continue
 			}
-			fields := vpnSplitIPTRuleLine(lineText)
+			fields := splitRuleLine(lineText)
 			if len(fields) < 2 || fields[0] != "-A" {
 				continue
 			}
@@ -140,7 +140,7 @@ func vpnDefaultRouteIface(ctx context.Context) (string, error) {
 	return "", fmt.Errorf("could not parse egress interface from %q", strings.TrimSpace(string(out)))
 }
 
-func vpnSplitIPTRuleLine(line string) []string {
+func splitRuleLine(line string) []string {
 	raw := strings.Fields(line)
 	out := make([]string, 0, len(raw))
 	for _, field := range raw {

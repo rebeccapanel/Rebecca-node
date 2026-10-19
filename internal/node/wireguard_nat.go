@@ -86,7 +86,7 @@ func wgRemoveNAT(ctx context.Context, iface string) error {
 			if lineText == "" || !strings.Contains(lineText, tag) {
 				continue
 			}
-			fields := wgSplitRuleLine(lineText)
+			fields := splitRuleLine(lineText)
 			if len(fields) < 2 || fields[0] != "-A" {
 				continue
 			}
@@ -118,21 +118,9 @@ func wgRuleExists(ctx context.Context, rule wgRule) bool {
 	return err == nil
 }
 
-// wgSplitRuleLine tokenises an `iptables -S` line, stripping the double quotes
+// splitRuleLine tokenises an `iptables -S` line, stripping the double quotes
 // iptables wraps the --comment value in so the replayed -D spec matches what was
 // installed.
-func wgSplitRuleLine(line string) []string {
-	raw := strings.Fields(line)
-	out := make([]string, 0, len(raw))
-	for _, field := range raw {
-		if len(field) >= 2 && field[0] == '"' && field[len(field)-1] == '"' {
-			field = field[1 : len(field)-1]
-		}
-		out = append(out, field)
-	}
-	return out
-}
-
 // wgDefaultRouteIface returns the interface the host uses to reach the internet,
 // read from the kernel route to a public address. This is the interface we
 // MASQUERADE out of.

@@ -31,16 +31,16 @@ type ovRuntime struct {
 }
 
 type ovRuntimeInbound struct {
-	Tag        string          `json:"tag"`
-	TunnelTag  string          `json:"tunnel_tag"`
-	Port       int             `json:"port"`
-	Transport  string          `json:"transport"`
-	TunnelPort int             `json:"tunnel_port"`
-	Settings   map[string]any  `json:"settings"`
-	Users      []ovRuntimeUser `json:"users"`
+	Tag        string           `json:"tag"`
+	TunnelTag  string           `json:"tunnel_tag"`
+	Port       int              `json:"port"`
+	Transport  string           `json:"transport"`
+	TunnelPort int              `json:"tunnel_port"`
+	Settings   map[string]any   `json:"settings"`
+	Users      []vpnRuntimeUser `json:"users"`
 }
 
-type ovRuntimeUser struct {
+type vpnRuntimeUser struct {
 	UserID      int64  `json:"user_id"`
 	Username    string `json:"username"`
 	VPNUsername string `json:"vpn_username"`
@@ -217,7 +217,7 @@ func (m *ovManager) writeInbound(inbound ovRuntimeInbound, callback *vpnSessionC
 	}
 	_, poolMask := ovNetworkMask(firstString(inbound.Settings["ipv4_pool_cidr"], "10.66.0.0/16"))
 	usersPath := filepath.Join(dir, "users.tsv")
-	if err := writeFileIfChanged(usersPath, []byte(usersTSV(inbound.Users)), 0o600); err != nil {
+	if err := writeFileIfChanged(usersPath, []byte(vpnUsersTSV(inbound.Users)), 0o600); err != nil {
 		return err
 	}
 	callbackPath := vpnSessionCallbackPath(dir)
@@ -1129,7 +1129,7 @@ vpn_release "$uid" "ov" %q "$session" "$assigned_ip" "$remote_ip"
 `, usersPath, usagePath, encodedInboundTag, accountingPath, vpnSessionShell(callbackPath, sessionsPath), safeName(inboundTag))
 }
 
-func usersTSV(users []ovRuntimeUser) string {
+func vpnUsersTSV(users []vpnRuntimeUser) string {
 	var b strings.Builder
 	for _, user := range users {
 		limit := ""

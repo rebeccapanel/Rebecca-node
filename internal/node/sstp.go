@@ -61,12 +61,12 @@ func (m *extraVPNManager) startSSTPLocked(inbound extraRuntimeInbound, callback 
 	if err := writeFileAtomic(filepath.Join(dir, "server.key"), []byte(key), 0o600); err != nil {
 		return err
 	}
-	users := make([]l2tpRuntimeUser, 0, len(inbound.Users))
+	users := make([]vpnRuntimeUser, 0, len(inbound.Users))
 	for _, user := range inbound.Users {
-		users = append(users, l2tpRuntimeUser{UserID: user.UserID, VPNUsername: user.Username, Password: user.Password, IPv4Address: user.IPv4Address, Status: user.Status, UsedTraffic: user.UsedTraffic, DataLimit: user.DataLimit, Expire: user.Expire, DeviceLimit: user.DeviceLimit})
+		users = append(users, vpnRuntimeUser{UserID: user.UserID, VPNUsername: user.Username, Password: user.Password, IPv4Address: user.IPv4Address, Status: user.Status, UsedTraffic: user.UsedTraffic, DataLimit: user.DataLimit, Expire: user.Expire, DeviceLimit: user.DeviceLimit})
 	}
 	usersPath := filepath.Join(dir, "users.tsv")
-	if err := writeFileAtomic(usersPath, []byte(l2tpUsersTSV(users)), 0o600); err != nil {
+	if err := writeFileAtomic(usersPath, []byte(vpnUsersTSV(users)), 0o600); err != nil {
 		return err
 	}
 	if err := writeVPNSessionCallback(vpnSessionCallbackPath(dir), callback); err != nil {
