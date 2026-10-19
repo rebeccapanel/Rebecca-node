@@ -180,6 +180,34 @@ func TestUserSpeedLimitBaseHashFollowsRoutingChanges(t *testing.T) {
 	}
 }
 
+func TestUserSpeedLimitPlanKeyFollowsApplyInputs(t *testing.T) {
+	limits := []userSpeedLimit{{UserID: 129939, SpeedLimitKbps: 10000}}
+	plan, err := buildUserSpeedLimitPlan(parseUserSpeedLimitTestDoc(t, userSpeedLimitTestDoc), limits, nil)
+	if err != nil {
+		t.Fatalf("build plan: %v", err)
+	}
+	key := userSpeedLimitPlanKey(plan, limits)
+	again, err := buildUserSpeedLimitPlan(parseUserSpeedLimitTestDoc(t, userSpeedLimitTestDoc), limits, nil)
+	if err != nil {
+		t.Fatalf("build plan: %v", err)
+	}
+	if userSpeedLimitPlanKey(again, limits) != key {
+		t.Fatalf("key must be stable for the same inputs")
+	}
+	faster := []userSpeedLimit{{UserID: 129939, SpeedLimitKbps: 20000}}
+	if userSpeedLimitPlanKey(plan, faster) == key {
+		t.Fatalf("key must change when a speed limit changes")
+	}
+	changed := strings.Replace(userSpeedLimitTestDoc, `"outboundTag": "direct"}`, `"outboundTag": "blocked"}`, 1)
+	changedPlan, err := buildUserSpeedLimitPlan(parseUserSpeedLimitTestDoc(t, changed), limits, nil)
+	if err != nil {
+		t.Fatalf("build changed plan: %v", err)
+	}
+	if userSpeedLimitPlanKey(changedPlan, limits) == key {
+		t.Fatalf("key must change when routing changes")
+	}
+}
+
 func TestUserSpeedLimitVPNBindingsMapsAssignedIPsOfLimitedUsers(t *testing.T) {
 	dir := t.TempDir()
 	content := strings.Join([]string{

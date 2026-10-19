@@ -22,25 +22,12 @@ type pptpRuntime struct {
 }
 
 type pptpRuntimeInbound struct {
-	Tag        string            `json:"tag"`
-	TunnelTag  string            `json:"tunnel_tag"`
-	Port       int               `json:"port"`
-	TunnelPort int               `json:"tunnel_port"`
-	Settings   map[string]any    `json:"settings"`
-	Users      []pptpRuntimeUser `json:"users"`
-}
-
-type pptpRuntimeUser struct {
-	UserID      int64  `json:"user_id"`
-	Username    string `json:"username"`
-	VPNUsername string `json:"vpn_username"`
-	Password    string `json:"password"`
-	IPv4Address string `json:"ipv4_address"`
-	Status      string `json:"status"`
-	UsedTraffic int64  `json:"used_traffic"`
-	DataLimit   *int64 `json:"data_limit,omitempty"`
-	Expire      *int64 `json:"expire,omitempty"`
-	DeviceLimit int64  `json:"device_limit,omitempty"`
+	Tag        string           `json:"tag"`
+	TunnelTag  string           `json:"tunnel_tag"`
+	Port       int              `json:"port"`
+	TunnelPort int              `json:"tunnel_port"`
+	Settings   map[string]any   `json:"settings"`
+	Users      []vpnRuntimeUser `json:"users"`
 }
 
 type pptpManager struct {
@@ -156,7 +143,7 @@ func (m *pptpManager) writeInbound(inbound pptpRuntimeInbound) error {
 		return err
 	}
 	usersPath := filepath.Join(m.baseDir, "users.tsv")
-	if err := os.WriteFile(usersPath, []byte(pptpUsersTSV(inbound.Users)), 0o600); err != nil {
+	if err := os.WriteFile(usersPath, []byte(vpnUsersTSV(inbound.Users)), 0o600); err != nil {
 		return err
 	}
 	if err := os.WriteFile(filepath.Join(m.baseDir, "nftables.nft"), []byte(pptpNFTScript(inbound)), 0o600); err != nil {
@@ -291,41 +278,13 @@ func pptpPPPOptions(inbound pptpRuntimeInbound) string {
 	return b.String()
 }
 
-func pptpChapSecrets(users []pptpRuntimeUser) string {
+func pptpChapSecrets(users []vpnRuntimeUser) string {
 	var b strings.Builder
 	for _, user := range users {
 		if strings.TrimSpace(user.VPNUsername) == "" || strings.TrimSpace(user.Password) == "" {
 			continue
 		}
 		line(&b, fmt.Sprintf("%q pptpd %q %s", user.VPNUsername, user.Password, firstString(user.IPv4Address, "*")))
-	}
-	return b.String()
-}
-
-func pptpUsersTSV(users []pptpRuntimeUser) string {
-	var b strings.Builder
-	for _, user := range users {
-		limit := ""
-		if user.DataLimit != nil {
-			limit = strconv.FormatInt(*user.DataLimit, 10)
-		}
-		expire := ""
-		if user.Expire != nil {
-			expire = strconv.FormatInt(*user.Expire, 10)
-		}
-		fields := []string{
-			strconv.FormatInt(user.UserID, 10),
-			user.VPNUsername,
-			user.Password,
-			user.IPv4Address,
-			strconv.FormatInt(user.UsedTraffic, 10),
-			limit,
-			user.Status,
-			expire,
-			strconv.FormatInt(user.DeviceLimit, 10),
-		}
-		b.WriteString(strings.Join(fields, "\t"))
-		b.WriteByte('\n')
 	}
 	return b.String()
 }
@@ -357,7 +316,7 @@ func pptpNFTScript(inbound pptpRuntimeInbound) string {
 `, strings.TrimRight(rules.String(), "\n"), pool, inbound.TunnelPort, pool)
 }
 
-func (m *pptpManager) disconnectStaleSessions(users []pptpRuntimeUser) {
+func (m *pptpManager) disconnectStaleSessions(users []vpnRuntimeUser) {
 	allowed := map[string]struct{}{}
 	for _, user := range users {
 		username := strings.TrimSpace(user.VPNUsername)
