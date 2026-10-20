@@ -371,6 +371,26 @@ func (m *ovManager) stopInboundName(name string) {
 		_ = exec.Command(nft, "delete", "table", "inet", "rebecca_openvpn_"+safeName(name)).Run()
 	}
 	_ = vpnRemoveDirectNAT("openvpn-" + name)
+	m.dropInboundSessions(name)
+}
+
+func (m *ovManager) dropInboundSessions(name string) {
+	path := vpnSessionsPath(m.baseDir)
+	tag := safeName(name)
+	_ = withVPNSessionLock(path, func() {
+		records := vpnSessionRecordsLocked(path)
+		if len(records) == 0 {
+			return
+		}
+		kept := make([][]string, 0, len(records))
+		for _, record := range records {
+			if len(record) >= 3 && record[1] == "ov" && record[2] == tag {
+				continue
+			}
+			kept = append(kept, record)
+		}
+		vpnWriteSessionRecordsLocked(path, kept)
+	})
 }
 
 func (m *ovManager) collectLiveUsageLocked(stats map[userUsageKey]int64) {
