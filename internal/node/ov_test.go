@@ -1,7 +1,9 @@
 package node
 
 import (
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -216,10 +218,74 @@ func TestOVDisconnectSubtractsAccountedUsage(t *testing.T) {
 		"printf 'openvpn:%s\\t%s\\t%s\\n' \"$uid\" \"$delta\" \"$INBOUND_TAG\"",
 		"remote_ip=${trusted_ip:-${untrusted_ip:-unknown}}",
 		"vpn_release \"$uid\" \"ov\" \"edge\" \"$session\" \"$assigned_ip\"",
-		"awk -F '\\t' -v sid=\"$session\" '$1 != sid { print }'",
+		"awk -F '\\t' -v OFS='\\t' -v sid=\"$session\" -v uid=\"$uid\" -v total=\"$total\" '$1 != sid { print } END { print sid, uid, total, 0, 1 }'",
 	} {
 		if !strings.Contains(script, want) {
 			t.Fatalf("disconnect script missing %q:\n%s", want, script)
 		}
+	}
+}
+
+func TestOVLiveUsageAndDisconnectCountEachByteOnce(t *testing.T) {
+	for _, tool := range []string{"sh", "awk", "flock"} {
+		if _, err := exec.LookPath(tool); err != nil {
+			t.Skipf("%s is required: %v", tool, err)
+		}
+	}
+	dir := t.TempDir()
+	inboundDir := filepath.Join(dir, "openvpn", "edge")
+	if err := os.MkdirAll(inboundDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "openvpn", "runtime.json"), []byte(`{"inbounds":[{"tag":"edge"}]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	usersPath := filepath.Join(inboundDir, "users.tsv")
+	if err := os.WriteFile(usersPath, []byte("42\talice\tpass\t10.66.0.2\t100\t1000\tactive\t\t0\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	statusPath := filepath.Join(inboundDir, "status.log")
+	writeStatus := func(rx, tx int64) {
+		t.Helper()
+		status := fmt.Sprintf("CLIENT_LIST,alice,198.51.100.10:5555,10.66.0.2,,%d,%d,2026-07-13 13:09:59,1783948199,alice,4,0,AES-256-GCM\n", rx, tx)
+		if err := os.WriteFile(statusPath, []byte(status), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	manager := newOVManager(dir, "binary")
+	collect := func() int64 {
+		var sum int64
+		for _, stat := range manager.CollectUsage() {
+			sum += stat.Value
+		}
+		return sum
+	}
+	disconnect := func(rx, tx int64) {
+		t.Helper()
+		script := filepath.Join(dir, "client-disconnect.sh")
+		body := disconnectScript(usersPath, filepath.Join(manager.baseDir, "usage.tsv"), filepath.Join(manager.baseDir, "accounting.tsv"), filepath.Join(dir, "callback.env"), vpnSessionsPath(manager.baseDir), "edge")
+		if err := os.WriteFile(script, []byte(body), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		cmd := exec.Command("sh", script)
+		cmd.Env = append(os.Environ(), "username=alice", fmt.Sprintf("bytes_received=%d", rx), fmt.Sprintf("bytes_sent=%d", tx), "trusted_ip=198.51.100.10", "trusted_port=5555")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("disconnect script failed: %v\n%s", err, out)
+		}
+	}
+
+	var counted int64
+	writeStatus(200, 300)
+	counted += collect()
+	writeStatus(400, 300)
+	counted += collect()
+	disconnect(450, 300)
+	counted += collect()
+	if err := os.WriteFile(statusPath, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	counted += collect()
+	if counted != 750 {
+		t.Fatalf("counted %d bytes, want 750 (450 received + 300 sent, each counted once)", counted)
 	}
 }
