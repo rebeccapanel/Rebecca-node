@@ -27,6 +27,8 @@ type Core struct {
 	cmd            *exec.Cmd
 	exited         chan struct{}
 	running        bool
+	stopRequested  bool
+	onUnexpected   func()
 	logs           *LogBus
 	version        string
 	debug          bool
@@ -114,6 +116,12 @@ func (c *Core) Started() bool {
 	return c.running
 }
 
+func (c *Core) SetUnexpectedExitHandler(handler func()) {
+	c.mu.Lock()
+	c.onUnexpected = handler
+	c.mu.Unlock()
+}
+
 func (c *Core) ExecutablePath() string {
 	return c.executablePath
 }
@@ -185,6 +193,7 @@ func (c *Core) start(config *Config) error {
 	c.cmd = cmd
 	c.exited = exited
 	c.running = true
+	c.stopRequested = false
 	c.startedAt = time.Now()
 	c.mu.Unlock()
 
@@ -198,7 +207,11 @@ func (c *Core) start(config *Config) error {
 			log.Print("xray exited")
 		}
 		c.mu.Lock()
+		var notify func()
 		if c.cmd == cmd {
+			if !c.stopRequested {
+				notify = c.onUnexpected
+			}
 			c.running = false
 			c.cmd = nil
 			c.startedAt = time.Time{}
@@ -206,6 +219,9 @@ func (c *Core) start(config *Config) error {
 		}
 		c.mu.Unlock()
 		close(exited)
+		if notify != nil {
+			notify()
+		}
 	}()
 
 	return nil
@@ -224,6 +240,9 @@ func (c *Core) Stop() {
 func (c *Core) stop() error {
 	c.mu.Lock()
 	cmd, exited := c.cmd, c.exited
+	if cmd != nil {
+		c.stopRequested = true
+	}
 	c.mu.Unlock()
 	if cmd == nil || cmd.Process == nil {
 		return nil

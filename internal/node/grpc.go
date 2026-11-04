@@ -22,6 +22,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
 	_ "google.golang.org/grpc/encoding/gzip"
+	"google.golang.org/grpc/keepalive"
 	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
 )
@@ -53,6 +54,8 @@ func (s *Server) ListenAndServeGRPC() error {
 		grpc.ChainUnaryInterceptor(s.sessionUnaryInterceptor, s.operations.unaryServerInterceptor),
 		grpc.MaxRecvMsgSize(64<<20),
 		grpc.MaxSendMsgSize(64<<20),
+		grpc.KeepaliveParams(keepalive.ServerParameters{Time: 30 * time.Second, Timeout: 10 * time.Second}),
+		grpc.KeepaliveEnforcementPolicy(keepalive.EnforcementPolicy{MinTime: 10 * time.Second, PermitWithoutStream: true}),
 	)
 	s.registerGRPC(grpcServer)
 	go s.notifyMasterReady()
