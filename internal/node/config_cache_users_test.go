@@ -224,3 +224,13 @@ func cacheTestClients(t *testing.T, raw string) []map[string]any {
 	}
 	return config.Inbounds[0].Settings.Clients
 }
+
+func TestInboundUserFromClientReadsMasquePass(t *testing.T) {
+	user, err := inboundUserFromClient("masque", map[string]any{"email": "1.a", "pass": "secret"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if user.Password != "secret" || user.Protocol != "masque" {
+		t.Fatalf("masque client = %+v, want the pass read as the password", user)
+	}
+}

@@ -35,6 +35,7 @@ func TestBuildUserAccountPerProtocol(t *testing.T) {
 		"vmess":       {Protocol: "vmess", Email: "u", ID: "11111111-1111-1111-1111-111111111111"},
 		"trojan":      {Protocol: "trojan", Email: "u", Password: "secret"},
 		"hysteria":    {Protocol: "hysteria", Email: "u", Auth: "token"},
+		"masque":      {Protocol: "masque", Email: "u", Password: "secret"},
 		"shadowsocks": {Protocol: "shadowsocks", Email: "u", Password: "secret", Method: "aes-256-gcm"},
 	}
 	for name, user := range cases {
@@ -55,6 +56,7 @@ func TestInboundUserValidateRejectsIncompleteUsers(t *testing.T) {
 		"vmess":       {Protocol: "vmess", Email: "u"},
 		"trojan":      {Protocol: "trojan", Email: "u"},
 		"hysteria":    {Protocol: "hysteria", Email: "u"},
+		"masque":      {Protocol: "masque", Email: "u"},
 		"shadowsocks": {Protocol: "shadowsocks", Email: "u"},
 		"no email":    {Protocol: "vless", ID: "x"},
 		"unsupported": {Protocol: "socks", Email: "u"},

@@ -54,7 +54,7 @@ func (u InboundUser) apiUser() map[string]any {
 		if tag := strings.TrimSpace(u.ReverseTag); tag != "" {
 			user["reverse"] = map[string]any{"tag": tag}
 		}
-	case "trojan":
+	case "trojan", "masque":
 		user["password"] = strings.TrimSpace(u.Password)
 	case "shadowsocks":
 		user["password"] = strings.TrimSpace(u.Password)
@@ -96,7 +96,7 @@ func (u InboundUser) validate() error {
 		if strings.TrimSpace(u.ID) == "" {
 			return fmt.Errorf("id is required for %s", protocol)
 		}
-	case "trojan", "shadowsocks":
+	case "trojan", "shadowsocks", "masque":
 		if strings.TrimSpace(u.Password) == "" {
 			return fmt.Errorf("password is required for %s", protocol)
 		}

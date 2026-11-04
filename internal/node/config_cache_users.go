@@ -472,7 +472,7 @@ func inboundUserFromClient(protocol string, client map[string]any) (xray.Inbound
 		Email:      strings.TrimSpace(asString(client["email"])),
 		Level:      level,
 		ID:         strings.TrimSpace(asString(firstPresent(client, "id", "uuid"))),
-		Password:   strings.TrimSpace(asString(client["password"])),
+		Password:   firstNonEmptyString(client["password"], client["pass"]),
 		Auth:       auth,
 		Flow:       strings.TrimSpace(asString(client["flow"])),
 		ReverseTag: reverseTag,
@@ -480,6 +480,15 @@ func inboundUserFromClient(protocol string, client map[string]any) (xray.Inbound
 		CipherType: cipherType,
 		IVCheck:    ivCheck,
 	}, nil
+}
+
+func firstNonEmptyString(values ...any) string {
+	for _, value := range values {
+		if text := strings.TrimSpace(asString(value)); text != "" {
+			return text
+		}
+	}
+	return ""
 }
 
 func firstPresent(values map[string]any, keys ...string) any {
