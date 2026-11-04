@@ -42,7 +42,7 @@ func (s *Server) removeUserFromConfigCache(inboundTag string, email string) erro
 	return s.patchConfigCacheUser(inboundTag, xray.InboundUser{}, email)
 }
 
-func (s *Server) applyConfigCacheUserDiff(incomingConfig string) error {
+func (s *Server) applyConfigCacheUserDiff(incomingConfig string, skipTags []string) error {
 	s.mu.Lock()
 	payload, ok := s.loadConfigCache()
 	s.mu.Unlock()
@@ -53,6 +53,7 @@ func (s *Server) applyConfigCacheUserDiff(incomingConfig string) error {
 	if err != nil {
 		return err
 	}
+	diff = diff.withoutInboundTags(skipTags)
 	methods := shadowsocksMethodsFromConfig(incomingConfig)
 	for index := range diff.add {
 		diff.add[index].user = withShadowsocksInboundMethod(diff.add[index].user, methods, diff.add[index].inboundTag)
@@ -324,6 +325,33 @@ type configUserDiffResult struct {
 	add    []configUserAdd
 	remove []configUserRemove
 	update []configUserUpdate
+}
+
+func (d configUserDiffResult) withoutInboundTags(tags []string) configUserDiffResult {
+	if len(tags) == 0 {
+		return d
+	}
+	skip := make(map[string]bool, len(tags))
+	for _, tag := range tags {
+		skip[tag] = true
+	}
+	var kept configUserDiffResult
+	for _, item := range d.add {
+		if !skip[item.inboundTag] {
+			kept.add = append(kept.add, item)
+		}
+	}
+	for _, item := range d.remove {
+		if !skip[item.inboundTag] {
+			kept.remove = append(kept.remove, item)
+		}
+	}
+	for _, item := range d.update {
+		if !skip[item.inboundTag] {
+			kept.update = append(kept.update, item)
+		}
+	}
+	return kept
 }
 
 type configUserAdd struct {

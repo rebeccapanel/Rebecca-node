@@ -39,6 +39,12 @@ var userSpeedLimitAppliedPID int
 
 var userSpeedLimitAppliedKey string
 
+func invalidateUserSpeedLimitPlan() {
+	userSpeedLimitMu.Lock()
+	userSpeedLimitAppliedKey = ""
+	userSpeedLimitMu.Unlock()
+}
+
 var userSpeedLimitCloneTagPattern = regexp.MustCompile("^" + userSpeedLimitTagPrefix + `[0-9]+-`)
 
 type userSpeedLimit struct {

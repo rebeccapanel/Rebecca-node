@@ -255,8 +255,8 @@ func (api *grpcAPI) SyncConfig(ctx context.Context, req *nodev1.RuntimeConfigReq
 	if api.server.core.Started() {
 		if api.server.runtimeConfigMatchesCache(req.GetConfigJson()) || api.server.runtimeTopologyMatchesCache(req.GetConfigJson()) {
 			response, err = api.server.grpcApplyRuntimeOnly(ctx, req, "runtime config synced")
-		} else if api.server.applyRuntimeTopologyDelta(ctx, req.GetConfigJson()) {
-			response, err = api.server.grpcApplyRuntimeOnly(ctx, req, "runtime topology synced")
+		} else if freshTags, ok := api.server.applyRuntimeTopologyDelta(ctx, req.GetConfigJson()); ok {
+			response, err = api.server.grpcApplyRuntimeOnly(ctx, req, "runtime topology synced", freshTags...)
 		} else {
 			response, err = api.server.grpcRestartRuntime(ctx, req, "runtime config synced")
 		}
@@ -878,12 +878,12 @@ func (s *Server) grpcRestartRuntime(ctx context.Context, req *nodev1.RuntimeConf
 	return s.grpcAction(req.GetOperationId(), true, message), nil
 }
 
-func (s *Server) grpcApplyRuntimeOnly(ctx context.Context, req *nodev1.RuntimeConfigRequest, message string) (*nodev1.RuntimeActionResponse, error) {
+func (s *Server) grpcApplyRuntimeOnly(ctx context.Context, req *nodev1.RuntimeConfigRequest, message string, skipUserDiffTags ...string) (*nodev1.RuntimeActionResponse, error) {
 	runtimeConfig, l2tpRuntimeConfig, pptpRuntimeConfig, wgRuntimeConfig, ikev2RuntimeConfig, anyConnectRuntimeConfig, haproxyRuntimeConfig, extraRuntimeConfig, err := grpcVPNRuntime(req)
 	if err != nil {
 		return nil, err
 	}
-	if err := s.applyConfigCacheUserDiff(req.GetConfigJson()); err != nil {
+	if err := s.applyConfigCacheUserDiff(req.GetConfigJson(), skipUserDiffTags); err != nil {
 		return nil, status.Error(codes.Unavailable, err.Error())
 	}
 	cacheRuntime := runtimeConfig
