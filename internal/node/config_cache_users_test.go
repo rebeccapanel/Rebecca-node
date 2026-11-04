@@ -234,3 +234,28 @@ func TestInboundUserFromClientReadsMasquePass(t *testing.T) {
 		t.Fatalf("masque client = %+v, want the pass read as the password", user)
 	}
 }
+
+func TestPatchConfigCacheWritesMasquePassAsPass(t *testing.T) {
+	config := `{"inbounds":[{"tag":"mq","protocol":"masque","settings":{"clients":[]}}]}`
+	patched, changed, err := patchConfigCacheUserJSON(config, "mq", xray.InboundUser{Protocol: "masque", Email: "1.a", Password: "secret"}, "")
+	if err != nil || !changed {
+		t.Fatalf("patch: changed=%v err=%v", changed, err)
+	}
+	var doc struct {
+		Inbounds []struct {
+			Settings struct {
+				Clients []map[string]any `json:"clients"`
+			} `json:"settings"`
+		} `json:"inbounds"`
+	}
+	if err := json.Unmarshal([]byte(patched), &doc); err != nil {
+		t.Fatal(err)
+	}
+	client := doc.Inbounds[0].Settings.Clients[0]
+	if client["pass"] != "secret" || client["email"] != "1.a" {
+		t.Fatalf("client = %#v, want email and pass", client)
+	}
+	if _, ok := client["password"]; ok {
+		t.Fatalf("a masque client must not carry password: %#v", client)
+	}
+}

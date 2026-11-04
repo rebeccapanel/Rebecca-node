@@ -233,6 +233,10 @@ func patchConfigCacheUserJSON(rawConfig string, inboundTag string, user xray.Inb
 			if strings.HasPrefix(asString(settings["method"]), "2022-") {
 				delete(client, "method")
 			}
+			if strings.EqualFold(asString(inbound["protocol"]), "masque") {
+				client["pass"] = client["password"]
+				delete(client, "password")
+			}
 			next = append(next, client)
 			changed = true
 		}
