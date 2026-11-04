@@ -68,6 +68,10 @@ func (l *serverityLogger) Handle(msg Message) {
 	}
 }
 
+func (l *serverityLogger) Severity() Severity {
+	return l.logLevel
+}
+
 func (l *generalLogger) run() {
 	defer l.access.Signal()
 
@@ -98,7 +102,6 @@ func (l *generalLogger) run() {
 }
 
 func (l *generalLogger) Handle(msg Message) {
-
 	select {
 	case l.buffer <- msg:
 	default:

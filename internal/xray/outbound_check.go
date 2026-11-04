@@ -112,7 +112,14 @@ func (c *Core) TestRoute(ctx context.Context, rawConfig string, inboundTag strin
 		return RouteTestRun{OutboundTestResult: OutboundTestResult{Error: errText, TestType: "latency"}}
 	}
 
-	selected, _ := TestRoute("127.0.0.1", apiPort, 3*time.Second, request)
+	var selected RouteTestResult
+	routingAPI := &XrayAPI{}
+	if err := routingAPI.Init(apiPort); err == nil {
+		if result, err := routingAPI.TestRoute(request); err == nil && result != nil {
+			selected = *result
+		}
+		routingAPI.Close()
+	}
 	run := RouteTestRun{Matched: selected.Matched, OutboundTag: selected.OutboundTag, GroupTags: selected.GroupTags}
 	delay, statusCode, err := measureSocksDelay(socksPort, testURL)
 	if err != nil {

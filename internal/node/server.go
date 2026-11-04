@@ -87,6 +87,7 @@ var xrayCoreDownloadBaseURLs = []string{"https://github.com/XTLS/Xray-core/relea
 var validateXrayCoreDownloadURL = validatePublicHTTPURL
 
 func New(settings appconfig.Settings) (*Server, error) {
+	xray.SetBinFolderPath(settings.XrayAssetsPath)
 	core, err := xray.NewCore(settings.XrayExecutablePath, settings.XrayAssetsPath, settings.Debug)
 	if err != nil {
 		return nil, err

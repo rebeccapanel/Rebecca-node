@@ -3,11 +3,9 @@ package node
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"log"
 	"reflect"
 	"sort"
-	"strings"
 
 	"github.com/rebeccapanel/rebecca-node/internal/xray"
 )
@@ -212,11 +210,11 @@ func (s *Server) applyRuntimeTopologyDelta(ctx context.Context, configJSON strin
 		return nil, false
 	}
 	prepareTProxyConfig(incomingCfg)
-	exe := s.core.ExecutablePath()
-	addr := fmt.Sprintf("127.0.0.1:%d", s.settings.XrayAPIPort)
-	applyCtx, cancel := context.WithTimeout(ctx, userSpeedLimitApplyTimeout)
-	defer cancel()
-	if err := applyRuntimeTopologyAPI(applyCtx, exe, addr, delta); err != nil {
+	api, err := xray.SharedAPI(s.settings.XrayAPIPort)
+	if err != nil {
+		return nil, false
+	}
+	if err := applyRuntimeTopologyAPI(api, delta); err != nil {
 		log.Printf("runtime topology apply failed, restarting Xray: %v", err)
 		return nil, false
 	}
@@ -227,47 +225,67 @@ func (s *Server) applyRuntimeTopologyDelta(ctx context.Context, configJSON strin
 	return delta.freshInboundTags(), true
 }
 
-func topologyMissingHandler(err error) bool {
-	if err == nil {
-		return false
+func addInboundReconciling(api *xray.XrayAPI, inbound []byte) error {
+	err := api.AddInbound(inbound)
+	if err == nil || !xray.IsExistingTagErr(err) {
+		return err
 	}
-	msg := strings.ToLower(err.Error())
-	return strings.Contains(msg, "not found") || strings.Contains(msg, "not enough information")
+	var meta struct {
+		Tag string `json:"tag"`
+	}
+	if jsonErr := json.Unmarshal(inbound, &meta); jsonErr != nil || meta.Tag == "" {
+		return err
+	}
+	if delErr := api.DelInbound(meta.Tag); delErr != nil && !xray.IsMissingHandlerErr(delErr) {
+		return delErr
+	}
+	return api.AddInbound(inbound)
 }
 
-func applyRuntimeTopologyAPI(ctx context.Context, exe, addr string, delta runtimeTopologyDelta) error {
+func addOutboundReconciling(api *xray.XrayAPI, outbound []byte) error {
+	err := api.AddOutbound(outbound)
+	if err == nil || !xray.IsExistingTagErr(err) {
+		return err
+	}
+	var meta struct {
+		Tag string `json:"tag"`
+	}
+	if jsonErr := json.Unmarshal(outbound, &meta); jsonErr != nil || meta.Tag == "" {
+		return err
+	}
+	if delErr := api.DelOutbound(meta.Tag); delErr != nil && !xray.IsMissingHandlerErr(delErr) {
+		return delErr
+	}
+	return api.AddOutbound(outbound)
+}
+
+func applyRuntimeTopologyAPI(api *xray.XrayAPI, delta runtimeTopologyDelta) error {
 	for _, tag := range delta.removeInbounds {
-		args := []string{"api", "rmi", "-s", addr, "-t", userSpeedLimitAPITimeout, tag}
-		if err := userSpeedLimitRunXray(ctx, exe, args, nil); err != nil && !topologyMissingHandler(err) {
+		if err := api.DelInbound(tag); err != nil && !xray.IsMissingHandlerErr(err) {
 			return err
 		}
 	}
-	for _, tag := range delta.removeOutbounds {
-		if err := userSpeedLimitRemoveOutbounds(ctx, exe, addr, []string{tag}); err != nil && !topologyMissingHandler(err) {
-			return err
-		}
+	if err := userSpeedLimitRemoveOutbounds(api, delta.removeOutbounds); err != nil {
+		return err
 	}
-	if len(delta.addOutbounds) > 0 {
-		if err := userSpeedLimitAddOutbounds(ctx, exe, addr, delta.addOutbounds); err != nil {
-			return err
-		}
+	if err := userSpeedLimitAddOutbounds(api, delta.addOutbounds); err != nil {
+		return err
 	}
-	if len(delta.addInbounds) > 0 {
-		data, err := json.Marshal(map[string]any{"inbounds": delta.addInbounds})
+	for _, inbound := range delta.addInbounds {
+		data, err := json.Marshal(inbound)
 		if err != nil {
 			return err
 		}
-		if err := userSpeedLimitRunXray(ctx, exe, []string{"api", "adi", "-s", addr, "-t", userSpeedLimitAPITimeout, "/dev/stdin"}, data); err != nil {
+		if err := addInboundReconciling(api, data); err != nil {
 			return err
 		}
 	}
 	if delta.routing != nil {
-		rules, _ := delta.routing["rules"].([]any)
-		if rules == nil {
-			rules = []any{}
+		data, err := json.Marshal(delta.routing)
+		if err != nil {
+			return err
 		}
-		balancers, _ := delta.routing["balancers"].([]any)
-		return userSpeedLimitReplaceRouting(ctx, exe, addr, rules, balancers)
+		return api.ApplyRoutingConfig(data)
 	}
 	return nil
 }

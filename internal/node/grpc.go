@@ -326,13 +326,11 @@ func (api *grpcAPI) RemoveUser(ctx context.Context, req *nodev1.RemoveInboundUse
 		return nil, status.Error(codes.InvalidArgument, "email is required")
 	}
 	if err := xray.RemoveInboundUser(
-		api.server.settings.XrayAPIHost,
 		api.server.settings.XrayAPIPort,
-		grpcOperationTimeout,
 		inboundTag,
 		email,
 	); err != nil {
-		if !isIgnorableXrayRemoveError(err) {
+		if !xray.IsMissingUserErr(err) {
 			return nil, status.Error(codes.Unavailable, err.Error())
 		}
 	}
@@ -1131,13 +1129,11 @@ func (s *Server) grpcAddUser(req *nodev1.InboundUserRequest, message string) (*n
 	}
 	user = withShadowsocksInboundMethod(user, s.shadowsocksInboundMethods(), inboundTag)
 	if err := xray.AddInboundUser(
-		s.settings.XrayAPIHost,
 		s.settings.XrayAPIPort,
-		grpcOperationTimeout,
 		inboundTag,
 		user,
 	); err != nil {
-		if !isIgnorableXrayAddError(err) {
+		if !xray.IsUserExistsErr(err) {
 			return nil, status.Error(codes.Unavailable, err.Error())
 		}
 	}

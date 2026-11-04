@@ -66,7 +66,7 @@ func (api *grpcAPI) TestRoute(ctx context.Context, req *nodev1.RouteTestRequest)
 			InboundTag: req.GetInboundTag(),
 			Domain:     req.GetDomain(),
 			IP:         req.GetIp(),
-			Port:       req.GetPort(),
+			Port:       int(req.GetPort()),
 			Network:    req.GetNetwork(),
 			Protocol:   req.GetProtocol(),
 			Email:      req.GetEmail(),

@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/pires/go-proxyproto"
-	"github.com/sagernet/sing/common/control"
 	"github.com/xtls/xray-core/common/errors"
 	"github.com/xtls/xray-core/common/net"
 )
@@ -18,10 +17,10 @@ import (
 var effectiveListener = DefaultListener{}
 
 type DefaultListener struct {
-	controllers []control.Func
+	controllers []func(network, address string, c syscall.RawConn) error
 }
 
-func getControlFunc(ctx context.Context, sockopt *SocketConfig, controllers []control.Func) func(network, address string, c syscall.RawConn) error {
+func getControlFunc(ctx context.Context, sockopt *SocketConfig, controllers []func(network, address string, c syscall.RawConn) error) func(network, address string, c syscall.RawConn) error {
 	return func(network, address string, c syscall.RawConn) error {
 		return c.Control(func(fd uintptr) {
 			for _, controller := range controllers {
@@ -90,6 +89,9 @@ func (dl *DefaultListener) Listen(ctx context.Context, addr net.Addr, sockopt *S
 		lc.Control = getControlFunc(ctx, sockopt, dl.controllers)
 		// default disable keepalive
 		lc.KeepAlive = -1
+		// MPTCP is enabled by default golang listener
+		// due to CVE-2026-98432, MPTCP should be disabled by default
+		lc.SetMultipathTCP(false)
 		if sockopt != nil {
 			if sockopt.TcpKeepAliveIdle*sockopt.TcpKeepAliveInterval < 0 {
 				return nil, errors.New("invalid TcpKeepAliveIdle or TcpKeepAliveInterval value: ", sockopt.TcpKeepAliveIdle, " ", sockopt.TcpKeepAliveInterval)
@@ -108,9 +110,7 @@ func (dl *DefaultListener) Listen(ctx context.Context, addr net.Addr, sockopt *S
 				lc.KeepAliveConfig.Enable = true
 				lc.KeepAliveConfig.Interval = time.Duration(sockopt.TcpKeepAliveInterval) * time.Second
 			}
-			if sockopt.TcpMptcp {
-				lc.SetMultipathTCP(true)
-			}
+			lc.SetMultipathTCP(sockopt.TcpMptcp)
 		}
 	case *net.UnixAddr:
 		lc.Control = nil
@@ -186,7 +186,7 @@ func (dl *DefaultListener) ListenPacket(ctx context.Context, addr net.Addr, sock
 // The controller can be used to operate on file descriptors before they are put into use.
 //
 // xray:api:beta
-func RegisterListenerController(controller control.Func) error {
+func RegisterListenerController(controller func(network, address string, c syscall.RawConn) error) error {
 	if controller == nil {
 		return errors.New("nil listener controller")
 	}

@@ -107,18 +107,14 @@ func (s *Server) applyConfigUserDiffResult(diff configUserDiffResult) error {
 	return applyConfigUserDiff(diff,
 		func(inboundTag string, user xray.InboundUser) error {
 			return xray.AddInboundUser(
-				s.settings.XrayAPIHost,
 				s.settings.XrayAPIPort,
-				grpcOperationTimeout,
 				inboundTag,
 				user,
 			)
 		},
 		func(inboundTag string, email string) error {
 			return xray.RemoveInboundUser(
-				s.settings.XrayAPIHost,
 				s.settings.XrayAPIPort,
-				grpcOperationTimeout,
 				inboundTag,
 				email,
 			)
@@ -147,23 +143,23 @@ func applyConfigUserDiff(
 	remove func(string, string) error,
 ) error {
 	for _, item := range diff.remove {
-		if err := remove(item.inboundTag, item.email); err != nil && !isIgnorableXrayRemoveError(err) {
+		if err := remove(item.inboundTag, item.email); err != nil && !xray.IsMissingUserErr(err) {
 			return err
 		}
 	}
 	for _, item := range diff.update {
-		if err := remove(item.inboundTag, item.previous.Email); err != nil && !isIgnorableXrayRemoveError(err) {
+		if err := remove(item.inboundTag, item.previous.Email); err != nil && !xray.IsMissingUserErr(err) {
 			return err
 		}
-		if err := add(item.inboundTag, item.current); err != nil && !isIgnorableXrayAddError(err) {
-			if restoreErr := add(item.inboundTag, item.previous); restoreErr != nil && !isIgnorableXrayAddError(restoreErr) {
+		if err := add(item.inboundTag, item.current); err != nil && !xray.IsUserExistsErr(err) {
+			if restoreErr := add(item.inboundTag, item.previous); restoreErr != nil && !xray.IsUserExistsErr(restoreErr) {
 				return fmt.Errorf("update inbound user: %v; restore previous user: %w", err, restoreErr)
 			}
 			return err
 		}
 	}
 	for _, item := range diff.add {
-		if err := add(item.inboundTag, item.user); err != nil && !isIgnorableXrayAddError(err) {
+		if err := add(item.inboundTag, item.user); err != nil && !xray.IsUserExistsErr(err) {
 			return err
 		}
 	}
