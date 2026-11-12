@@ -7,6 +7,7 @@ import (
 
 	c "github.com/xtls/xray-core/common/ctx"
 	"github.com/xtls/xray-core/common/errors"
+	"github.com/xtls/xray-core/common/geodata"
 	"github.com/xtls/xray-core/common/net"
 	"github.com/xtls/xray-core/common/protocol"
 	"github.com/xtls/xray-core/common/signal"
@@ -69,8 +70,6 @@ type Outbound struct {
 	Tag string
 	// Name of the outbound proxy that handles the connection.
 	Name string
-	// Unused. Conn is actually internet.Connection. May be nil. It is currently nil for outbound with proxySettings
-	Conn net.Conn
 	// CanSpliceCopy is a property for this connection
 	// 1 = can, 2 = after processing protocol info should be able to, 3 = cannot
 	CanSpliceCopy int
@@ -78,7 +77,8 @@ type Outbound struct {
 
 // SniffingRequest controls the behavior of content sniffing. They are from inbound config. Read-only
 type SniffingRequest struct {
-	ExcludeForDomain               []string
+	ExcludeForDomain               geodata.DomainMatcher
+	ExcludeForIP                   geodata.IPMatcher
 	OverrideDestinationForProtocol []string
 	Enabled                        bool
 	MetadataOnly                   bool

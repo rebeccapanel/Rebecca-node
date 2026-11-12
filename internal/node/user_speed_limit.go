@@ -1,12 +1,13 @@
 package node
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"github.com/xtls/xray-core/app/proxyman/command"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -22,13 +23,12 @@ import (
 )
 
 const (
-	userSpeedLimitMarkBase   uint32 = 0x10000000
-	userSpeedLimitMarkMask   uint32 = 0xf0000000
-	userSpeedLimitTable             = "rebecca_user_speed"
-	userSpeedLimitTagPrefix         = "rl-u"
-	userSpeedLimitStateFile         = "user-speed-limits.json"
-	userSpeedLimitMinBurst   int64  = 32768
-	userSpeedLimitAPITimeout        = "30"
+	userSpeedLimitMarkBase  uint32 = 0x10000000
+	userSpeedLimitMarkMask  uint32 = 0xf0000000
+	userSpeedLimitTable            = "rebecca_user_speed"
+	userSpeedLimitTagPrefix        = "rl-u"
+	userSpeedLimitStateFile        = "user-speed-limits.json"
+	userSpeedLimitMinBurst  int64  = 32768
 )
 
 const userSpeedLimitApplyTimeout = 60 * time.Second
@@ -38,6 +38,12 @@ var userSpeedLimitMu sync.Mutex
 var userSpeedLimitAppliedPID int
 
 var userSpeedLimitAppliedKey string
+
+func invalidateUserSpeedLimitPlan() {
+	userSpeedLimitMu.Lock()
+	userSpeedLimitAppliedKey = ""
+	userSpeedLimitMu.Unlock()
+}
 
 var userSpeedLimitCloneTagPattern = regexp.MustCompile("^" + userSpeedLimitTagPrefix + `[0-9]+-`)
 
@@ -395,79 +401,69 @@ func writeUserSpeedLimitMap(b *strings.Builder, name string, keyType string, ele
 	fmt.Fprintf(b, "  map %s { type %s : verdict; elements = { %s }; }\n", name, keyType, strings.Join(elements, ", "))
 }
 
-func userSpeedLimitRunXray(ctx context.Context, exe string, args []string, stdin []byte) error {
-	cmd := exec.CommandContext(ctx, exe, args...)
-	if stdin != nil {
-		cmd.Stdin = bytes.NewReader(stdin)
+func userSpeedLimitOutboundTags(api *xray.XrayAPI) ([]string, error) {
+	if api.HandlerServiceClient == nil {
+		return nil, errors.New("xray HandlerServiceClient is not initialized")
 	}
-	out, err := cmd.CombinedOutput()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	listing, err := (*api.HandlerServiceClient).ListOutbounds(ctx, &command.ListOutboundsRequest{})
 	if err != nil {
-		return fmt.Errorf("xray %s: %w: %s", strings.Join(args[:2], " "), err, strings.TrimSpace(string(out)))
-	}
-	return nil
-}
-
-func userSpeedLimitOutboundTags(ctx context.Context, exe, addr string) ([]string, error) {
-	cmd := exec.CommandContext(ctx, exe, "api", "lso", "-s", addr)
-	out, err := cmd.Output()
-	if err != nil {
-		return nil, fmt.Errorf("xray api lso: %w", err)
-	}
-	var listing struct {
-		Outbounds []struct {
-			Tag string `json:"tag"`
-		} `json:"outbounds"`
-	}
-	if err := json.Unmarshal(out, &listing); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("list outbounds: %w", err)
 	}
 	var tags []string
-	for _, item := range listing.Outbounds {
-		if userSpeedLimitCloneTagPattern.MatchString(item.Tag) {
-			tags = append(tags, item.Tag)
+	for _, item := range listing.GetOutbounds() {
+		if userSpeedLimitCloneTagPattern.MatchString(item.GetTag()) {
+			tags = append(tags, item.GetTag())
 		}
 	}
 	return tags, nil
 }
 
-func userSpeedLimitReplaceRouting(ctx context.Context, exe, addr string, rules []any, balancers []any) error {
+func userSpeedLimitReplaceRouting(api *xray.XrayAPI, rules []any, balancers []any) error {
 	routing := map[string]any{"rules": rules}
 	if len(balancers) > 0 {
 		routing["balancers"] = balancers
 	}
-	data, err := json.Marshal(map[string]any{"routing": routing})
+	data, err := json.Marshal(routing)
 	if err != nil {
 		return err
 	}
-	return userSpeedLimitRunXray(ctx, exe, []string{"api", "adrules", "-s", addr, "-t", userSpeedLimitAPITimeout, "/dev/stdin"}, data)
+	return api.ApplyRoutingConfig(data)
 }
 
-func userSpeedLimitAddOutbounds(ctx context.Context, exe, addr string, outbounds []map[string]any) error {
-	data, err := json.Marshal(map[string]any{"outbounds": outbounds})
-	if err != nil {
-		return err
+func userSpeedLimitAddOutbounds(api *xray.XrayAPI, outbounds []map[string]any) error {
+	for _, outbound := range outbounds {
+		data, err := json.Marshal(outbound)
+		if err != nil {
+			return err
+		}
+		if err := addOutboundReconciling(api, data); err != nil {
+			return err
+		}
 	}
-	return userSpeedLimitRunXray(ctx, exe, []string{"api", "ado", "-s", addr, "-t", userSpeedLimitAPITimeout, "/dev/stdin"}, data)
+	return nil
 }
 
-func userSpeedLimitRemoveOutbounds(ctx context.Context, exe, addr string, tags []string) error {
-	if len(tags) == 0 {
-		return nil
+func userSpeedLimitRemoveOutbounds(api *xray.XrayAPI, tags []string) error {
+	for _, tag := range tags {
+		if err := api.DelOutbound(tag); err != nil && !xray.IsMissingHandlerErr(err) {
+			return err
+		}
 	}
-	args := append([]string{"api", "rmo", "-s", addr}, tags...)
-	return userSpeedLimitRunXray(ctx, exe, args, nil)
+	return nil
 }
 
-func applyUserSpeedLimitRuntime(ctx context.Context, exe, addr string, plan *userSpeedLimitPlan, baseChanged bool) error {
-	existing, err := userSpeedLimitOutboundTags(ctx, exe, addr)
+func applyUserSpeedLimitRuntime(api *xray.XrayAPI, plan *userSpeedLimitPlan, baseChanged bool) error {
+	existing, err := userSpeedLimitOutboundTags(api)
 	if err != nil {
 		return err
 	}
 	if baseChanged {
-		if err := userSpeedLimitReplaceRouting(ctx, exe, addr, plan.BaseRules, plan.Balancers); err != nil {
+		if err := userSpeedLimitReplaceRouting(api, plan.BaseRules, plan.Balancers); err != nil {
 			return err
 		}
-		if err := userSpeedLimitRemoveOutbounds(ctx, exe, addr, existing); err != nil {
+		if err := userSpeedLimitRemoveOutbounds(api, existing); err != nil {
 			return err
 		}
 		existing = nil
@@ -483,11 +479,11 @@ func applyUserSpeedLimitRuntime(ctx context.Context, exe, addr string, plan *use
 		}
 	}
 	if len(missing) > 0 {
-		if err := userSpeedLimitAddOutbounds(ctx, exe, addr, missing); err != nil {
+		if err := userSpeedLimitAddOutbounds(api, missing); err != nil {
 			return err
 		}
 	}
-	if err := userSpeedLimitReplaceRouting(ctx, exe, addr, plan.Overlay, plan.Balancers); err != nil {
+	if err := userSpeedLimitReplaceRouting(api, plan.Overlay, plan.Balancers); err != nil {
 		return err
 	}
 	var stale []string
@@ -496,7 +492,7 @@ func applyUserSpeedLimitRuntime(ctx context.Context, exe, addr string, plan *use
 			stale = append(stale, tag)
 		}
 	}
-	return userSpeedLimitRemoveOutbounds(ctx, exe, addr, stale)
+	return userSpeedLimitRemoveOutbounds(api, stale)
 }
 
 func applyUserSpeedLimitNFT(ctx context.Context, script string) error {
@@ -572,9 +568,11 @@ func (s *Server) reconcileUserSpeedLimits(ctx context.Context, cfg *xray.Config,
 		return nil
 	}
 	userSpeedLimitAppliedKey = ""
-	exe := s.core.ExecutablePath()
-	addr := fmt.Sprintf("127.0.0.1:%d", s.settings.XrayAPIPort)
-	if err := applyUserSpeedLimitRuntime(ctx, exe, addr, plan, state.BaseHash != plan.BaseHash); err != nil {
+	api, err := xray.SharedAPI(s.settings.XrayAPIPort)
+	if err != nil {
+		return err
+	}
+	if err := applyUserSpeedLimitRuntime(api, plan, state.BaseHash != plan.BaseHash); err != nil {
 		return err
 	}
 	if err := applyUserSpeedLimitNFT(ctx, plan.NFTScript); err != nil {

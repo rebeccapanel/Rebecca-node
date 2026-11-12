@@ -17,6 +17,7 @@ const (
 	UseFreedomSplice = "xray.buf.splice"
 	UseVmessPadding  = "xray.vmess.padding"
 	UseCone          = "xray.cone.disabled"
+	UseStrictJSON    = "xray.json.strict"
 
 	BufferSize           = "xray.ray.buffer.size"
 	BrowserDialerAddress = "xray.browser.dialer"
@@ -24,8 +25,6 @@ const (
 	XUDPBaseKey          = "xray.xudp.basekey"
 
 	TunFdKey = "xray.tun.fd"
-
-	MphCachePath = "xray.mph.cache"
 )
 
 type EnvFlag struct {
@@ -73,7 +72,7 @@ func NormalizeEnvName(name string) string {
 	return strings.ReplaceAll(strings.ToUpper(strings.TrimSpace(name)), ".", "_")
 }
 
-func getExecutableDir() string {
+func GetExecutableDir() string {
 	exec, err := os.Executable()
 	if err != nil {
 		return ""
@@ -82,7 +81,7 @@ func getExecutableDir() string {
 }
 
 func GetConfigurationPath() string {
-	configPath := NewEnvFlag(ConfigLocation).GetValue(getExecutableDir)
+	configPath := NewEnvFlag(ConfigLocation).GetValue(GetExecutableDir)
 	return filepath.Join(configPath, "config.json")
 }
 

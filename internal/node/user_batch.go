@@ -90,7 +90,7 @@ func (s *Server) upsertBatchUser(inboundTag string, user xray.InboundUser) error
 	}
 	user = withShadowsocksInboundMethod(user, s.shadowsocksInboundMethods(), inboundTag)
 	if !cacheAvailable {
-		if err := xray.AddInboundUser(s.settings.XrayAPIHost, s.settings.XrayAPIPort, grpcOperationTimeout, inboundTag, user); err != nil && !isIgnorableXrayAddError(err) {
+		if err := xray.AddInboundUser(s.settings.XrayAPIPort, inboundTag, user); err != nil && !xray.IsUserExistsErr(err) {
 			return err
 		}
 		return s.addUserToConfigCache(inboundTag, user)
@@ -111,7 +111,7 @@ func (s *Server) removeBatchUser(inboundTag string, email string) error {
 	if email == "" {
 		return status.Error(codes.InvalidArgument, "email is required")
 	}
-	if err := xray.RemoveInboundUser(s.settings.XrayAPIHost, s.settings.XrayAPIPort, grpcOperationTimeout, inboundTag, email); err != nil && !isIgnorableXrayRemoveError(err) {
+	if err := xray.RemoveInboundUser(s.settings.XrayAPIPort, inboundTag, email); err != nil && !xray.IsMissingUserErr(err) {
 		return err
 	}
 	return s.removeUserFromConfigCache(inboundTag, email)

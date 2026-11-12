@@ -1,8 +1,9 @@
 package vmess
 
 import (
-	"google.golang.org/protobuf/proto"
 	"strings"
+
+	"google.golang.org/protobuf/proto"
 
 	"github.com/xtls/xray-core/common/errors"
 	"github.com/xtls/xray-core/common/protocol"
@@ -30,7 +31,7 @@ func (a *MemoryAccount) Equals(account protocol.Account) bool {
 }
 
 func (a *MemoryAccount) ToProto() proto.Message {
-	var test = ""
+	test := ""
 	if a.AuthenticatedLengthExperiment {
 		test = "AuthenticatedLength|"
 	}
@@ -48,7 +49,7 @@ func (a *MemoryAccount) ToProto() proto.Message {
 func (a *Account) AsAccount() (protocol.Account, error) {
 	id, err := uuid.ParseString(a.Id)
 	if err != nil {
-		return nil, errors.New("failed to parse ID").Base(err).AtError()
+		return nil, errors.New("failed to parse ID").Base(err)
 	}
 	protoID := protocol.NewID(id)
 	var AuthenticatedLength, NoTerminationSignal bool

@@ -42,7 +42,7 @@ func (s *Server) removeUserFromConfigCache(inboundTag string, email string) erro
 	return s.patchConfigCacheUser(inboundTag, xray.InboundUser{}, email)
 }
 
-func (s *Server) applyConfigCacheUserDiff(incomingConfig string) error {
+func (s *Server) applyConfigCacheUserDiff(incomingConfig string, skipTags []string) error {
 	s.mu.Lock()
 	payload, ok := s.loadConfigCache()
 	s.mu.Unlock()
@@ -53,6 +53,7 @@ func (s *Server) applyConfigCacheUserDiff(incomingConfig string) error {
 	if err != nil {
 		return err
 	}
+	diff = diff.withoutInboundTags(skipTags)
 	methods := shadowsocksMethodsFromConfig(incomingConfig)
 	for index := range diff.add {
 		diff.add[index].user = withShadowsocksInboundMethod(diff.add[index].user, methods, diff.add[index].inboundTag)
@@ -106,18 +107,14 @@ func (s *Server) applyConfigUserDiffResult(diff configUserDiffResult) error {
 	return applyConfigUserDiff(diff,
 		func(inboundTag string, user xray.InboundUser) error {
 			return xray.AddInboundUser(
-				s.settings.XrayAPIHost,
 				s.settings.XrayAPIPort,
-				grpcOperationTimeout,
 				inboundTag,
 				user,
 			)
 		},
 		func(inboundTag string, email string) error {
 			return xray.RemoveInboundUser(
-				s.settings.XrayAPIHost,
 				s.settings.XrayAPIPort,
-				grpcOperationTimeout,
 				inboundTag,
 				email,
 			)
@@ -146,23 +143,23 @@ func applyConfigUserDiff(
 	remove func(string, string) error,
 ) error {
 	for _, item := range diff.remove {
-		if err := remove(item.inboundTag, item.email); err != nil && !isIgnorableXrayRemoveError(err) {
+		if err := remove(item.inboundTag, item.email); err != nil && !xray.IsMissingUserErr(err) {
 			return err
 		}
 	}
 	for _, item := range diff.update {
-		if err := remove(item.inboundTag, item.previous.Email); err != nil && !isIgnorableXrayRemoveError(err) {
+		if err := remove(item.inboundTag, item.previous.Email); err != nil && !xray.IsMissingUserErr(err) {
 			return err
 		}
-		if err := add(item.inboundTag, item.current); err != nil && !isIgnorableXrayAddError(err) {
-			if restoreErr := add(item.inboundTag, item.previous); restoreErr != nil && !isIgnorableXrayAddError(restoreErr) {
+		if err := add(item.inboundTag, item.current); err != nil && !xray.IsUserExistsErr(err) {
+			if restoreErr := add(item.inboundTag, item.previous); restoreErr != nil && !xray.IsUserExistsErr(restoreErr) {
 				return fmt.Errorf("update inbound user: %v; restore previous user: %w", err, restoreErr)
 			}
 			return err
 		}
 	}
 	for _, item := range diff.add {
-		if err := add(item.inboundTag, item.user); err != nil && !isIgnorableXrayAddError(err) {
+		if err := add(item.inboundTag, item.user); err != nil && !xray.IsUserExistsErr(err) {
 			return err
 		}
 	}
@@ -235,6 +232,10 @@ func patchConfigCacheUserJSON(rawConfig string, inboundTag string, user xray.Inb
 			client := inboundUserClientMap(user)
 			if strings.HasPrefix(asString(settings["method"]), "2022-") {
 				delete(client, "method")
+			}
+			if strings.EqualFold(asString(inbound["protocol"]), "masque") {
+				client["pass"] = client["password"]
+				delete(client, "password")
 			}
 			next = append(next, client)
 			changed = true
@@ -324,6 +325,33 @@ type configUserDiffResult struct {
 	add    []configUserAdd
 	remove []configUserRemove
 	update []configUserUpdate
+}
+
+func (d configUserDiffResult) withoutInboundTags(tags []string) configUserDiffResult {
+	if len(tags) == 0 {
+		return d
+	}
+	skip := make(map[string]bool, len(tags))
+	for _, tag := range tags {
+		skip[tag] = true
+	}
+	var kept configUserDiffResult
+	for _, item := range d.add {
+		if !skip[item.inboundTag] {
+			kept.add = append(kept.add, item)
+		}
+	}
+	for _, item := range d.remove {
+		if !skip[item.inboundTag] {
+			kept.remove = append(kept.remove, item)
+		}
+	}
+	for _, item := range d.update {
+		if !skip[item.inboundTag] {
+			kept.update = append(kept.update, item)
+		}
+	}
+	return kept
 }
 
 type configUserAdd struct {
@@ -448,7 +476,7 @@ func inboundUserFromClient(protocol string, client map[string]any) (xray.Inbound
 		Email:      strings.TrimSpace(asString(client["email"])),
 		Level:      level,
 		ID:         strings.TrimSpace(asString(firstPresent(client, "id", "uuid"))),
-		Password:   strings.TrimSpace(asString(client["password"])),
+		Password:   firstNonEmptyString(client["password"], client["pass"]),
 		Auth:       auth,
 		Flow:       strings.TrimSpace(asString(client["flow"])),
 		ReverseTag: reverseTag,
@@ -456,6 +484,15 @@ func inboundUserFromClient(protocol string, client map[string]any) (xray.Inbound
 		CipherType: cipherType,
 		IVCheck:    ivCheck,
 	}, nil
+}
+
+func firstNonEmptyString(values ...any) string {
+	for _, value := range values {
+		if text := strings.TrimSpace(asString(value)); text != "" {
+			return text
+		}
+	}
+	return ""
 }
 
 func firstPresent(values map[string]any, keys ...string) any {

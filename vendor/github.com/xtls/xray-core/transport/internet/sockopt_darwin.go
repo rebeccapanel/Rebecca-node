@@ -114,13 +114,13 @@ func applyOutboundSocketOptions(network string, address string, fd uintptr, conf
 
 		if config.TcpKeepAliveIdle > 0 || config.TcpKeepAliveInterval > 0 {
 			if config.TcpKeepAliveIdle > 0 {
-				if err := unix.SetsockoptInt(int(fd), unix.IPPROTO_TCP, unix.TCP_KEEPALIVE, int(config.TcpKeepAliveInterval)); err != nil {
-					return errors.New("failed to set TCP_KEEPINTVL", err)
+				if err := unix.SetsockoptInt(int(fd), unix.IPPROTO_TCP, unix.TCP_KEEPALIVE, int(config.TcpKeepAliveIdle)); err != nil {
+					return errors.New("failed to set TCP_KEEPALIVE", err)
 				}
 			}
 			if config.TcpKeepAliveInterval > 0 {
-				if err := unix.SetsockoptInt(int(fd), unix.IPPROTO_TCP, sysTCP_KEEPINTVL, int(config.TcpKeepAliveIdle)); err != nil {
-					return errors.New("failed to set TCP_KEEPIDLE", err)
+				if err := unix.SetsockoptInt(int(fd), unix.IPPROTO_TCP, sysTCP_KEEPINTVL, int(config.TcpKeepAliveInterval)); err != nil {
+					return errors.New("failed to set TCP_KEEPINTVL", err)
 				}
 			}
 			if err := unix.SetsockoptInt(int(fd), unix.SOL_SOCKET, unix.SO_KEEPALIVE, 1); err != nil {
@@ -135,17 +135,16 @@ func applyOutboundSocketOptions(network string, address string, fd uintptr, conf
 
 	if config.Interface != "" {
 		iface, err := net.InterfaceByName(config.Interface)
-
 		if err != nil {
-			return errors.New("failed to get interface ", config.Interface).Base(err)
+			return NewBindError(errors.New("failed to get interface ", config.Interface).Base(err))
 		}
 		if network == "tcp6" || network == "udp6" {
 			if err := unix.SetsockoptInt(int(fd), unix.IPPROTO_IPV6, unix.IPV6_BOUND_IF, iface.Index); err != nil {
-				return errors.New("failed to set IPV6_BOUND_IF").Base(err)
+				return NewBindError(errors.New("failed to set IPV6_BOUND_IF").Base(err))
 			}
 		} else {
 			if err := unix.SetsockoptInt(int(fd), unix.IPPROTO_IP, unix.IP_BOUND_IF, iface.Index); err != nil {
-				return errors.New("failed to set IP_BOUND_IF").Base(err)
+				return NewBindError(errors.New("failed to set IP_BOUND_IF").Base(err))
 			}
 		}
 	}
@@ -163,7 +162,7 @@ func applyOutboundSocketOptions(network string, address string, fd uintptr, conf
 			if !strings.HasPrefix(network, custom.Network) {
 				continue
 			}
-			var level = 0x6 // default TCP
+			level := 0x6 // default TCP
 			var opt int
 			if len(custom.Opt) == 0 {
 				return errors.New("No opt!")
@@ -205,13 +204,13 @@ func applyInboundSocketOptions(network string, fd uintptr, config *SocketConfig)
 
 		if config.TcpKeepAliveIdle > 0 || config.TcpKeepAliveInterval > 0 {
 			if config.TcpKeepAliveIdle > 0 {
-				if err := unix.SetsockoptInt(int(fd), unix.IPPROTO_TCP, unix.TCP_KEEPALIVE, int(config.TcpKeepAliveInterval)); err != nil {
-					return errors.New("failed to set TCP_KEEPINTVL", err)
+				if err := unix.SetsockoptInt(int(fd), unix.IPPROTO_TCP, unix.TCP_KEEPALIVE, int(config.TcpKeepAliveIdle)); err != nil {
+					return errors.New("failed to set TCP_KEEPALIVE", err)
 				}
 			}
 			if config.TcpKeepAliveInterval > 0 {
-				if err := unix.SetsockoptInt(int(fd), unix.IPPROTO_TCP, sysTCP_KEEPINTVL, int(config.TcpKeepAliveIdle)); err != nil {
-					return errors.New("failed to set TCP_KEEPIDLE", err)
+				if err := unix.SetsockoptInt(int(fd), unix.IPPROTO_TCP, sysTCP_KEEPINTVL, int(config.TcpKeepAliveInterval)); err != nil {
+					return errors.New("failed to set TCP_KEEPINTVL", err)
 				}
 			}
 			if err := unix.SetsockoptInt(int(fd), unix.SOL_SOCKET, unix.SO_KEEPALIVE, 1); err != nil {
@@ -226,7 +225,6 @@ func applyInboundSocketOptions(network string, fd uintptr, config *SocketConfig)
 
 	if config.Interface != "" {
 		iface, err := net.InterfaceByName(config.Interface)
-
 		if err != nil {
 			return errors.New("failed to get interface ", config.Interface).Base(err)
 		}
@@ -260,7 +258,7 @@ func applyInboundSocketOptions(network string, fd uintptr, config *SocketConfig)
 			if !strings.HasPrefix(network, custom.Network) {
 				continue
 			}
-			var level = 0x6 // default TCP
+			level := 0x6 // default TCP
 			var opt int
 			if len(custom.Opt) == 0 {
 				return errors.New("No opt!")
@@ -288,42 +286,16 @@ func applyInboundSocketOptions(network string, fd uintptr, config *SocketConfig)
 	return nil
 }
 
-func bindAddr(fd uintptr, address []byte, port uint32) error {
-	setReuseAddr(fd)
-	setReusePort(fd)
-
-	var sockaddr unix.Sockaddr
-
-	switch len(address) {
-	case net.IPv4len:
-		a4 := &unix.SockaddrInet4{
-			Port: int(port),
-		}
-		copy(a4.Addr[:], address)
-		sockaddr = a4
-	case net.IPv6len:
-		a6 := &unix.SockaddrInet6{
-			Port: int(port),
-		}
-		copy(a6.Addr[:], address)
-		sockaddr = a6
-	default:
-		return errors.New("unexpected length of ip")
-	}
-
-	return unix.Bind(int(fd), sockaddr)
-}
-
 func setReuseAddr(fd uintptr) error {
 	if err := unix.SetsockoptInt(int(fd), unix.SOL_SOCKET, unix.SO_REUSEADDR, 1); err != nil {
-		return errors.New("failed to set SO_REUSEADDR").Base(err).AtWarning()
+		return errors.New("failed to set SO_REUSEADDR").Base(err)
 	}
 	return nil
 }
 
 func setReusePort(fd uintptr) error {
 	if err := unix.SetsockoptInt(int(fd), unix.SOL_SOCKET, unix.SO_REUSEPORT, 1); err != nil {
-		return errors.New("failed to set SO_REUSEPORT").Base(err).AtWarning()
+		return errors.New("failed to set SO_REUSEPORT").Base(err)
 	}
 	return nil
 }

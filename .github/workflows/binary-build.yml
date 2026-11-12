@@ -462,4 +462,10 @@ jobs:
               --target "${GITHUB_SHA}"
           fi
 
-          gh release upload "${RELEASE_TAG}" dev-assets/* --clobber
+          for attempt in 1 2 3 4; do
+            if gh release upload "${RELEASE_TAG}" dev-assets/* --clobber; then
+              exit 0
+            fi
+            sleep $((attempt * 10))
+          done
+          exit 1

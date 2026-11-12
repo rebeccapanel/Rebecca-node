@@ -1,85 +1,37 @@
 # Rebecca-node
 
-## Quick install
-Install Rebecca-node with Docker using this script:
+Rebecca-node is the agent that runs on each node server. It controls Xray and talks to the Rebecca panel over mutually authenticated gRPC.
+
+## Install
+
+The node connects to the panel with the certificate and token flow in the panel. Run this on the node server:
+
 ```bash
-sudo bash -c "$(curl -sL https://raw.githubusercontent.com/rebeccapanel/Rebecca/dev/scripts/rebecca/rebecca-node.sh)" @ install
-```
-Install Rebecca-node with Docker and a custom name:
-```bash
-sudo bash -c "$(curl -sL https://raw.githubusercontent.com/rebeccapanel/Rebecca/dev/scripts/rebecca/rebecca-node.sh)" @ install --name rebecca-node2
-```
-Install Rebecca-node as a native binary service:
-```bash
-sudo bash -c "$(curl -sL https://raw.githubusercontent.com/rebeccapanel/Rebecca/dev/scripts/rebecca/rebecca-node-binary.sh)" @ install
-```
-Install the binary dev channel:
-```bash
-sudo bash -c "$(curl -sL https://raw.githubusercontent.com/rebeccapanel/Rebecca/dev/scripts/rebecca/rebecca-node-binary.sh)" @ install --dev
-```
-Install the Docker dev channel:
-```bash
-sudo bash -c "$(curl -sL https://raw.githubusercontent.com/rebeccapanel/Rebecca/dev/scripts/rebecca/rebecca-node.sh)" @ install --dev
-```
-Or you can only install the Docker node script by using this command:
-```bash
-sudo bash -c "$(curl -sL https://raw.githubusercontent.com/rebeccapanel/Rebecca/dev/scripts/rebecca/rebecca-node.sh)" @ install-script
+curl -sL https://raw.githubusercontent.com/rebeccapanel/Rebecca/master/scripts/rebecca/rebecca-node-binary.sh | sudo bash -s -- install
 ```
 
-The Docker and binary installers are intentionally separate. Use the matching script for update, restart, core update, and script update operations.
+The installer creates a systemd service and downloads the release for the server's architecture.
 
-OpenVPN runtime support is binary-only. Docker nodes reject OpenVPN runtime payloads
-instead of installing host VPN prerequisites inside the container.
+- Dev channel: `curl -sL https://raw.githubusercontent.com/rebeccapanel/Rebecca/dev/scripts/rebecca/rebecca-node-binary.sh | sudo bash -s -- install --dev`
+- Second node on the same server: add `--name rebecca-node2` to the install command.
+- Commands: `rebecca-node help`
 
-WireGuard runtime support is binary-only for the same reason. On first use the node installs
-`wireguard-tools`, `nftables`, loads the kernel module, and reconciles one kernel interface per
-inbound. By default each WireGuard inbound sends TCP/UDP traffic through nftables TPROXY to its
-Xray tunnel port, so Rebecca routing rules still apply. Direct MASQUERADE/NAT is available only
-when the runtime explicitly sets `nat_enabled=true`. The master pushes WireGuard state inside the
-shared runtime envelope (`ov_runtime_json`) under `wg_inbounds`, each with a server `private_key`,
-`address_pool`, `listen_port`, `tunnel_port` and a `peers` list (`public_key`, optional
-`preshared_key`, `address`). Per-peer rx+tx is read from the kernel and reported to the master as
-`wg:<user_id>` usage deltas.
+Always pipe the script into `sudo bash -s --` as shown. Running it as `sudo bash -c "$(curl ...)"` can fail with `Argument list too long`.
 
-Use `help` to view all commands:
-```Rebecca-node help```
+## Host requirements
 
+OpenVPN and WireGuard set up their prerequisites on the node itself.
 
-## Manual install
-Read the setup guide here: Soon!
+WireGuard, on first use, installs `wireguard-tools` and `nftables`, loads the kernel module, and creates one kernel interface per inbound. Traffic reaches Xray through nftables TPROXY, so the panel's routing rules still apply. NAT (MASQUERADE) is used only when the runtime sets `nat_enabled=true`.
 
-## Runtime
-Rebecca-node is implemented in Go and ships one host-level binary:
+## Build
 
-- `rebecca-node`: the mutually authenticated gRPC service used by the Rebecca master to control Xray and schedule safe on-host restart/update commands
+CI builds binaries for every push to `dev`, every pull request, and every published release. Release assets cover Linux (`386`, `amd64`, `arm64`, `armv5`, `armv6`, `armv7`, `s390x`) and Windows `amd64`.
 
-## Binary builds
-Linux `amd64` and Windows `amd64` binaries are built for:
-
-- every push to `dev`
-- every pull request
-- every published or prereleased GitHub release
-
-Release assets are uploaded as raw executables for all supported release targets:
-
-- `rebecca-node-<version>-linux-386`
-- `rebecca-node-<version>-linux-amd64`
-- `rebecca-node-<version>-linux-arm64`
-- `rebecca-node-<version>-linux-armv5`
-- `rebecca-node-<version>-linux-armv6`
-- `rebecca-node-<version>-linux-armv7`
-- `rebecca-node-<version>-linux-s390x`
-- `rebecca-node-<version>-windows-amd64.exe`
-
-You can also reproduce the CI packaging flow locally:
+To build and test locally:
 
 ```bash
 go run ./tools/build
 go run ./tools/smoke
-```
-
-The Go packages can be checked directly with:
-
-```bash
 go test ./...
 ```

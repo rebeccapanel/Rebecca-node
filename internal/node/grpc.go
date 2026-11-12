@@ -22,6 +22,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
 	_ "google.golang.org/grpc/encoding/gzip"
+	"google.golang.org/grpc/keepalive"
 	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
 )
@@ -53,6 +54,8 @@ func (s *Server) ListenAndServeGRPC() error {
 		grpc.ChainUnaryInterceptor(s.sessionUnaryInterceptor, s.operations.unaryServerInterceptor),
 		grpc.MaxRecvMsgSize(64<<20),
 		grpc.MaxSendMsgSize(64<<20),
+		grpc.KeepaliveParams(keepalive.ServerParameters{Time: 30 * time.Second, Timeout: 10 * time.Second}),
+		grpc.KeepaliveEnforcementPolicy(keepalive.EnforcementPolicy{MinTime: 10 * time.Second, PermitWithoutStream: true}),
 	)
 	s.registerGRPC(grpcServer)
 	go s.notifyMasterReady()
@@ -255,8 +258,8 @@ func (api *grpcAPI) SyncConfig(ctx context.Context, req *nodev1.RuntimeConfigReq
 	if api.server.core.Started() {
 		if api.server.runtimeConfigMatchesCache(req.GetConfigJson()) || api.server.runtimeTopologyMatchesCache(req.GetConfigJson()) {
 			response, err = api.server.grpcApplyRuntimeOnly(ctx, req, "runtime config synced")
-		} else if api.server.applyRuntimeTopologyDelta(ctx, req.GetConfigJson()) {
-			response, err = api.server.grpcApplyRuntimeOnly(ctx, req, "runtime topology synced")
+		} else if freshTags, ok := api.server.applyRuntimeTopologyDelta(ctx, req.GetConfigJson()); ok {
+			response, err = api.server.grpcApplyRuntimeOnly(ctx, req, "runtime topology synced", freshTags...)
 		} else {
 			response, err = api.server.grpcRestartRuntime(ctx, req, "runtime config synced")
 		}
@@ -326,13 +329,11 @@ func (api *grpcAPI) RemoveUser(ctx context.Context, req *nodev1.RemoveInboundUse
 		return nil, status.Error(codes.InvalidArgument, "email is required")
 	}
 	if err := xray.RemoveInboundUser(
-		api.server.settings.XrayAPIHost,
 		api.server.settings.XrayAPIPort,
-		grpcOperationTimeout,
 		inboundTag,
 		email,
 	); err != nil {
-		if !isIgnorableXrayRemoveError(err) {
+		if !xray.IsMissingUserErr(err) {
 			return nil, status.Error(codes.Unavailable, err.Error())
 		}
 	}
@@ -878,12 +879,12 @@ func (s *Server) grpcRestartRuntime(ctx context.Context, req *nodev1.RuntimeConf
 	return s.grpcAction(req.GetOperationId(), true, message), nil
 }
 
-func (s *Server) grpcApplyRuntimeOnly(ctx context.Context, req *nodev1.RuntimeConfigRequest, message string) (*nodev1.RuntimeActionResponse, error) {
+func (s *Server) grpcApplyRuntimeOnly(ctx context.Context, req *nodev1.RuntimeConfigRequest, message string, skipUserDiffTags ...string) (*nodev1.RuntimeActionResponse, error) {
 	runtimeConfig, l2tpRuntimeConfig, pptpRuntimeConfig, wgRuntimeConfig, ikev2RuntimeConfig, anyConnectRuntimeConfig, haproxyRuntimeConfig, extraRuntimeConfig, err := grpcVPNRuntime(req)
 	if err != nil {
 		return nil, err
 	}
-	if err := s.applyConfigCacheUserDiff(req.GetConfigJson()); err != nil {
+	if err := s.applyConfigCacheUserDiff(req.GetConfigJson(), skipUserDiffTags); err != nil {
 		return nil, status.Error(codes.Unavailable, err.Error())
 	}
 	cacheRuntime := runtimeConfig
@@ -1131,13 +1132,11 @@ func (s *Server) grpcAddUser(req *nodev1.InboundUserRequest, message string) (*n
 	}
 	user = withShadowsocksInboundMethod(user, s.shadowsocksInboundMethods(), inboundTag)
 	if err := xray.AddInboundUser(
-		s.settings.XrayAPIHost,
 		s.settings.XrayAPIPort,
-		grpcOperationTimeout,
 		inboundTag,
 		user,
 	); err != nil {
-		if !isIgnorableXrayAddError(err) {
+		if !xray.IsUserExistsErr(err) {
 			return nil, status.Error(codes.Unavailable, err.Error())
 		}
 	}

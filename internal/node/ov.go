@@ -81,6 +81,7 @@ type ovAccountingRecord struct {
 	UserID string
 	Total  int64
 	Base   int64
+	Closed bool
 }
 
 func newOVManager(dataDir string, installMode string) *ovManager {
@@ -371,6 +372,26 @@ func (m *ovManager) stopInboundName(name string) {
 		_ = exec.Command(nft, "delete", "table", "inet", "rebecca_openvpn_"+safeName(name)).Run()
 	}
 	_ = vpnRemoveDirectNAT("openvpn-" + name)
+	m.dropInboundSessions(name)
+}
+
+func (m *ovManager) dropInboundSessions(name string) {
+	path := vpnSessionsPath(m.baseDir)
+	tag := safeName(name)
+	_ = withVPNSessionLock(path, func() {
+		records := vpnSessionRecordsLocked(path)
+		if len(records) == 0 {
+			return
+		}
+		kept := make([][]string, 0, len(records))
+		for _, record := range records {
+			if len(record) >= 3 && record[1] == "ov" && record[2] == tag {
+				continue
+			}
+			kept = append(kept, record)
+		}
+		vpnWriteSessionRecordsLocked(path, kept)
+	})
 }
 
 func (m *ovManager) collectLiveUsageLocked(stats map[userUsageKey]int64) {
@@ -383,6 +404,7 @@ func (m *ovManager) collectLiveUsageLocked(stats map[userUsageKey]int64) {
 				tagByDir[safeName(inbound.Tag)] = inbound.Tag
 			}
 		}
+		listed := map[string]struct{}{}
 		if entries, err := os.ReadDir(m.baseDir); err == nil {
 			for _, entry := range entries {
 				if !entry.IsDir() {
@@ -392,7 +414,11 @@ func (m *ovManager) collectLiveUsageLocked(stats map[userUsageKey]int64) {
 				inboundTag := tagByDir[entry.Name()]
 				users := readOVUsers(filepath.Join(dir, "users.tsv"))
 				for _, session := range readOVStatus(filepath.Join(dir, "status.log"), users) {
+					listed[session.SessionID] = struct{}{}
 					record := records[session.SessionID]
+					if record.Closed {
+						continue
+					}
 					if record.UserID == "" {
 						record.UserID = session.UserID
 					}
@@ -408,6 +434,11 @@ func (m *ovManager) collectLiveUsageLocked(stats map[userUsageKey]int64) {
 						killOVClient(dir, session.Username)
 					}
 				}
+			}
+		}
+		for session, record := range records {
+			if _, ok := listed[session]; !ok && record.Closed {
+				delete(records, session)
 			}
 		}
 		writeOVAccounting(accountingPath, records)
@@ -466,7 +497,7 @@ func readOVStatus(path string, users map[string]ovUserSnapshot) []ovLiveSession 
 		if total <= 0 {
 			continue
 		}
-		sessionID := safeName("ov:" + strings.TrimSpace(record[2]) + ":" + user.Username)
+		sessionID := ovAccountingKey("ov:" + strings.TrimSpace(record[2]) + ":" + user.Username)
 		sessions = append(sessions, ovLiveSession{
 			SessionID: sessionID,
 			Username:  user.Username,
@@ -492,6 +523,16 @@ func ovStatusBytes(record []string) (int64, int64) {
 	return rx, tx
 }
 
+func ovAccountingKey(value string) string {
+	b := []byte(value)
+	for i, c := range b {
+		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '_' || c == '.' || c == ':' || c == '-') {
+			b[i] = '_'
+		}
+	}
+	return string(b)
+}
+
 func readOVAccounting(path string) map[string]ovAccountingRecord {
 	raw, err := os.ReadFile(path)
 	if err != nil {
@@ -508,7 +549,8 @@ func readOVAccounting(path string) map[string]ovAccountingRecord {
 		if len(parts) >= 4 {
 			base, _ = strconv.ParseInt(parts[3], 10, 64)
 		}
-		records[parts[0]] = ovAccountingRecord{UserID: parts[1], Total: total, Base: base}
+		closed := len(parts) >= 5 && parts[4] == "1"
+		records[parts[0]] = ovAccountingRecord{UserID: parts[1], Total: total, Base: base, Closed: closed}
 	}
 	return records
 }
@@ -526,6 +568,12 @@ func writeOVAccounting(path string, records map[string]ovAccountingRecord) {
 		b.WriteString(strconv.FormatInt(record.Total, 10))
 		b.WriteByte('\t')
 		b.WriteString(strconv.FormatInt(record.Base, 10))
+		b.WriteByte('\t')
+		if record.Closed {
+			b.WriteByte('1')
+		} else {
+			b.WriteByte('0')
+		}
 		b.WriteByte('\n')
 	}
 	_ = os.WriteFile(path, []byte(b.String()), 0o600)
@@ -1113,14 +1161,14 @@ if [ -n "$uid" ] && [ "$total" -gt 0 ]; then
   touch "$ACCOUNTING"
   (
     flock -x 9 || exit 0
-    previous=$(awk -F '\t' -v sid="$session" '$1 == sid { print $3; found=1; exit } END { if (!found) print 0 }' "$ACCOUNTING")
+    previous=$(awk -F '\t' -v sid="$session" '$1 == sid { print ($5 == "1" ? 0 : $3); found=1; exit } END { if (!found) print 0 }' "$ACCOUNTING")
     case "$previous" in ''|*[!0-9]*) previous=0 ;; esac
     delta=$((total - previous))
     if [ "$delta" -gt 0 ]; then
       printf 'openvpn:%%s\t%%s\t%%s\n' "$uid" "$delta" "$INBOUND_TAG" >> "$USAGE"
     fi
     tmp="${ACCOUNTING}.$$"
-    awk -F '\t' -v sid="$session" '$1 != sid { print }' "$ACCOUNTING" > "$tmp"
+    awk -F '\t' -v OFS='\t' -v sid="$session" -v uid="$uid" -v total="$total" '$1 != sid { print } END { print sid, uid, total, 0, 1 }' "$ACCOUNTING" > "$tmp"
     mv "$tmp" "$ACCOUNTING"
     chmod 600 "$ACCOUNTING"
   ) 9>"$ACCOUNTING_LOCK"

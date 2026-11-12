@@ -15,6 +15,8 @@ import (
 	utls "github.com/refraction-networking/utls"
 )
 
+// Reality specifc file, used for target detection
+
 var GlobalPostHandshakeRecordsLens sync.Map
 var GlobalMaxCSSMsgCount sync.Map
 
@@ -34,6 +36,7 @@ func DetectPostHandshakeRecordsLens(config *Config) {
 					if err != nil {
 						return
 					}
+					defer target.Close()
 					if config.Xver == 1 || config.Xver == 2 {
 						if _, err = proxyproto.HeaderProxyFromAddrs(config.Xver, target.LocalAddr(), target.RemoteAddr()).WriteTo(target); err != nil {
 							return
@@ -68,6 +71,7 @@ func DetectPostHandshakeRecordsLens(config *Config) {
 					if err != nil {
 						return
 					}
+					defer target.Close()
 					if config.Xver == 1 || config.Xver == 2 {
 						if _, err = proxyproto.HeaderProxyFromAddrs(config.Xver, target.LocalAddr(), target.RemoteAddr()).WriteTo(target); err != nil {
 							return
@@ -124,6 +128,10 @@ func (c *PostHandshakeRecordDetectConn) Read(b []byte) (n int, err error) {
 	for {
 		if len(data) >= 5 && bytes.Equal(data[:3], []byte{23, 3, 3}) {
 			length := int(binary.BigEndian.Uint16(data[3:5])) + 5
+			// illegal dada
+			if length > len(data) {
+				break
+			}
 			postHandshakeRecordsLens = append(postHandshakeRecordsLens, length)
 			data = data[length:]
 		} else {
@@ -148,7 +156,7 @@ func (c *CCSDetectConn) Write(b []byte) (n int, err error) {
 			defer hasAlert.Store(true)
 			buf := make([]byte, 512)
 			for {
-				_, err = c.Conn.Read(buf)
+				_, err := c.Conn.Read(buf)
 				if err != nil {
 					return
 				}

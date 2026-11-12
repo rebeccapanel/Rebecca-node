@@ -27,7 +27,7 @@ func TestExtractHAProxyTemplateAndServeCustom404(t *testing.T) {
 	if err := writer.Close(); err != nil {
 		t.Fatal(err)
 	}
-	root, err := extractHAProxyTemplate(archive.Bytes(), filepath.Join(t.TempDir(), "template"))
+	root, err := extractHAProxyTemplate(archive.Bytes(), filepath.Join(t.TempDir(), "templates", "template"))
 	if err != nil {
 		t.Fatal(err)
 	}

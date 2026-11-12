@@ -380,6 +380,9 @@ func extractHAProxyTemplate(archive []byte, target string) (string, error) {
 	if err != nil || len(reader.File) == 0 || len(reader.File) > 2048 {
 		return "", fmt.Errorf("invalid HAProxy template ZIP")
 	}
+	if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
+		return "", err
+	}
 	stage, err := os.MkdirTemp(filepath.Dir(target), ".haproxy-template-")
 	if err != nil {
 		return "", err
